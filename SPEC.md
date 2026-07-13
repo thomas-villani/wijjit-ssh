@@ -1,16 +1,19 @@
 # wijjit-ssh — Implementation Spec
 
-Status: **in progress — M1 done.** This document specifies the work to take
-`wijjit-ssh` from the original prototype to something you could actually deploy:
-a real async byte-parser input path, pluggable authentication,
+Status: **in progress — M1 and M2 done.** This document specifies the work to
+take `wijjit-ssh` from the original prototype to something you could actually
+deploy: a real async byte-parser input path, pluggable authentication,
 terminal-capability negotiation, resource limits, graceful shutdown, logging,
 tests, and packaging.
 
-**M1 (the async byte-parser input path) is implemented** — see §4, which is now
-a description of the code rather than a plan. The reader thread and the
-prompt_toolkit pipe are gone; the channel is binary; 175 tests cover the
-decoder and a real client-server round trip. Everything from §5 (auth) onward
-is still to do.
+- **M1 — async byte-parser input path (§4).** Done. The reader thread and the
+  prompt_toolkit pipe are gone; the channel is binary.
+- **M2 — authentication (§5).** Done. Fail-closed, pluggable, with accept *and*
+  reject proven over real SSH.
+
+205 tests. §4 and §5 below now describe the code rather than a plan. Everything
+from §7 (host keys) onward is still to do — the big remaining gap is **resource
+limits (§8)**: nothing yet caps sessions, per-IP connections, or idle time.
 
 It is deliberately concrete — interface signatures, file layout, and phased
 milestones — so it can be read top-to-bottom to understand the whole design,
@@ -86,7 +89,7 @@ wijjit-ssh/
     server.py                 WijjitSSH, session glue (asyncssh callbacks)  [done]
     backend.py                RemoteTerminalBackend  (bytes I/O + size)     [done]
     input.py                  ChannelInputSource + KeyDecoder  (§4)         [done]
-    auth.py                   AuthPolicy + presets                 (TODO, §5)
+    auth.py                   AuthPolicy + presets            (§5)          [done]
     keys.py                   host-key loading/generation          (TODO, §7)
     limits.py                 SessionRegistry, timeouts, rate limit (TODO, §8)
     config.py                 ServerConfig dataclass               (TODO, §10)
@@ -97,7 +100,7 @@ wijjit-ssh/
   tests/
     test_input_decoder.py     table-driven byte->Key/Mouse (165 cases)      [done]
     test_roundtrip.py         in-process client<->server (10 tests)         [done]
-    test_auth.py              (TODO)
+    test_auth.py              policies + real-SSH accept/reject (30 tests)  [done]
     test_limits.py            (TODO)
 ```
 
@@ -400,10 +403,14 @@ cancel remaining tasks, close the listener.
 
 - **M1 — Byte parser. [DONE]** `KeyDecoder` + `ChannelInputSource`; backend
   switched to `encoding=None`; reader thread and prompt_toolkit pipe dropped from
-  the remote path. 175 tests green; black/ruff/mypy-strict clean. Core gained the
-  `InputSource` protocol (§2). Also hardened: a raising app factory now reports
-  to the client and logs, instead of dropping the connection silently.
-- **M2 — Auth.** `AuthPolicy` + presets; fail-closed default; `test_auth.py`.
+  the remote path. Core gained the `InputSource` protocol (§2). Also hardened: a
+  raising app factory now reports to the client and logs, instead of dropping the
+  connection silently.
+- **M2 — Auth. [DONE]** `AuthPolicy` + `AuthorizedKeys` / `PasswordAuth` /
+  `ChainAuth` / `OpenAuth`; every asyncssh auth callback forwarded to the policy;
+  fail-closed construction (`allow_anonymous=True` required to run open);
+  constant-time `check_password`; auth attempts logged (never the credential).
+  30 tests in `test_auth.py`, including accept **and reject** over real SSH.
 - **M3 — Robust lifecycle.** `keys.py`, `limits.py`, graceful shutdown,
   per-session logging, idle/keepalive.
 - **M4 — Config & polish.** `ServerConfig`, second example, README deployment

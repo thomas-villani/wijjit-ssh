@@ -7,6 +7,7 @@ SSH analogue of a Flask view - that builds an app per connection:
 
 >>> from wijjit import Wijjit, render_template_string
 >>> from wijjit_ssh import WijjitSSH
+>>> from wijjit_ssh.auth import AuthorizedKeys
 >>>
 >>> def make_app(session):
 ...     app = Wijjit(backend=session.backend)
@@ -18,24 +19,29 @@ SSH analogue of a Flask view - that builds an app per connection:
 ...         )
 ...     return app
 >>>
->>> WijjitSSH(make_app, host_keys=["ssh_host_key"]).run(port=8022)
+>>> WijjitSSH(
+...     make_app,
+...     host_keys=["ssh_host_key"],
+...     auth=AuthorizedKeys("~/.ssh/authorized_keys"),
+... ).run(port=8022)
 
-Then ``ssh -p 8022 anyone@localhost`` drops the client straight into the TUI.
+Then ``ssh -p 8022 you@localhost`` drops the client straight into the TUI.
 
-Prototype status / not-yet-hardened
-------------------------------------
-* **Auth is open** by default (any username, no credential). Pass ``authorize``
-  to gate connections, or subclass for real key/password auth. Never expose the
-  open default on an untrusted network.
+Authentication is **fail-closed**: constructing :class:`WijjitSSH` without an
+``auth`` policy raises unless ``allow_anonymous=True`` is passed explicitly. See
+:mod:`wijjit_ssh.auth`.
+
+Not yet hardened
+----------------
+* No resource limits (max sessions, per-IP caps, idle timeout).
 * Blocking sync handlers stall that session's frames; give each app an executor
-  (``Wijjit(..., )`` + ``EXECUTOR``) for CPU-bound work.
-* No resource limits yet (max sessions, idle timeout, per-IP caps).
+  (``EXECUTOR``) for CPU-bound work.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Optional
 
@@ -50,6 +56,7 @@ from wijjit import Wijjit
 from wijjit.logging_config import get_logger
 from wijjit.terminal.size import set_terminal_size
 
+from wijjit_ssh.auth import AuthPolicy, OpenAuth
 from wijjit_ssh.backend import RemoteTerminalBackend
 
 logger = get_logger(__name__)
@@ -86,7 +93,6 @@ class SSHSession:
 
 
 AppFactory = Callable[[SSHSession], Wijjit]
-Authorizer = Callable[[str], "bool | Awaitable[bool]"]
 
 
 class _WijjitSSHSession(asyncssh.SSHServerSession[bytes]):
@@ -247,23 +253,95 @@ class _WijjitSSHSession(asyncssh.SSHServerSession[bytes]):
 
 
 class _WijjitSSHServer(asyncssh.SSHServer):
-    """asyncssh server that mints a Wijjit session per connection."""
+    """asyncssh server that mints a Wijjit session per connection.
 
-    def __init__(
-        self, app_factory: AppFactory, authorize: Optional[Authorizer]
-    ) -> None:
+    Every authentication callback asyncssh offers is forwarded to the
+    :class:`~wijjit_ssh.auth.AuthPolicy`, so credentials live in the policy and
+    never in this glue.
+    """
+
+    def __init__(self, app_factory: AppFactory, auth: AuthPolicy) -> None:
         self._app_factory = app_factory
-        self._authorize = authorize
+        self._auth = auth
         self._conn: asyncssh.SSHServerConnection | None = None
 
     def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
         self._conn = conn
+        logger.info("Connection from %s", self._peer())
+
+    def connection_lost(self, exc: Optional[Exception]) -> None:
+        logger.info("Connection closed from %s", self._peer())
+
+    def _peer(self) -> str:
+        """The client's address, for logs."""
+        if self._conn is None:
+            return "unknown"
+        peer = self._conn.get_extra_info("peername")
+        if isinstance(peer, tuple) and len(peer) >= 2:
+            return f"{peer[0]}:{peer[1]}"
+        return str(peer)
+
+    # -- authentication (delegated to the policy) --------------------------------
 
     def begin_auth(self, username: str) -> bool:
-        # Return False => no authentication required for this user. When an
-        # authorizer is configured we still short-circuit here and enforce it in
-        # password/public-key callbacks in a real build; kept open in the sketch.
-        return False
+        required = self._auth.auth_required(username)
+        if not required:
+            logger.warning(
+                "Accepting %r from %s with NO authentication (open auth)",
+                username,
+                self._peer(),
+            )
+        return required
+
+    def password_auth_supported(self) -> bool:
+        return self._auth.password_supported()
+
+    async def validate_password(self, username: str, password: str) -> bool:
+        ok = await self._auth.verify_password(username, password)
+        self._log_auth("password", username, ok)
+        return ok
+
+    def public_key_auth_supported(self) -> bool:
+        return self._auth.public_key_supported()
+
+    def validate_public_key(self, username: str, key: "asyncssh.SSHKey") -> bool:
+        authorized = self._auth.authorized_keys_for(username)
+        # An unknown user yields None and an empty list means "no keys on
+        # record". Both deny: never let "nothing to check against" mean
+        # "nothing to check".
+        if not authorized:
+            self._log_auth("public-key", username, False)
+            return False
+
+        ok = any(key == candidate for candidate in authorized)
+        self._log_auth("public-key", username, ok)
+        return ok
+
+    def kbdint_auth_supported(self) -> bool:
+        return self._auth.kbdint_supported()
+
+    def get_kbdint_challenge(
+        self, username: str, lang: str, submethods: str
+    ) -> tuple[str, str, str, Sequence[tuple[str, bool]]]:
+        return ("", "", "", self._auth.kbdint_prompts(username))
+
+    async def validate_kbdint_response(
+        self, username: str, responses: Sequence[str]
+    ) -> bool:
+        ok = await self._auth.verify_kbdint(username, list(responses))
+        self._log_auth("keyboard-interactive", username, ok)
+        return ok
+
+    def _log_auth(self, method: str, username: str, ok: bool) -> None:
+        """Record an auth attempt. Never logs the credential itself."""
+        if ok:
+            logger.info("Auth OK (%s) for %r from %s", method, username, self._peer())
+        else:
+            logger.warning(
+                "Auth FAILED (%s) for %r from %s", method, username, self._peer()
+            )
+
+    # -- session -----------------------------------------------------------------
 
     def session_requested(self) -> _WijjitSSHSession:
         assert self._conn is not None  # asyncssh calls connection_made first
@@ -277,23 +355,62 @@ class WijjitSSH:
     ----------
     app_factory : Callable[[SSHSession], Wijjit]
         Builds the app for each connection (the SSH analogue of a Flask view).
-    host_keys : list of str
-        Paths to SSH host key files. Generate one with
-        ``ssh-keygen -f ssh_host_key -N ''``.
-    authorize : Callable[[str], bool] or None, optional
-        Optional per-username gate. Prototype: advisory only.
+    host_keys : list
+        SSH host keys: paths to key files, or :class:`asyncssh.SSHKey` objects.
+        Generate one with ``ssh-keygen -t ed25519 -f ssh_host_key -N ''``.
+    auth : AuthPolicy, optional
+        How to authenticate clients. See :mod:`wijjit_ssh.auth` -
+        :class:`~wijjit_ssh.auth.AuthorizedKeys` is the usual choice.
+    allow_anonymous : bool, optional
+        Permit running with **no authentication** (default False). Required to
+        omit ``auth``; see Raises.
+
+    Raises
+    ------
+    ValueError
+        If no ``auth`` policy is given and ``allow_anonymous`` is not True.
+        Serving an unauthenticated SSH server is a decision that has to be typed
+        out, not one you inherit by forgetting an argument - so the default
+        fails closed rather than silently accepting every client on the internet.
+
+    Examples
+    --------
+    >>> from wijjit_ssh.auth import AuthorizedKeys
+    >>> WijjitSSH(                                          # doctest: +SKIP
+    ...     make_app,
+    ...     host_keys=["ssh_host_key"],
+    ...     auth=AuthorizedKeys("~/.ssh/authorized_keys"),
+    ... ).run(port=8022)
     """
 
     def __init__(
         self,
         app_factory: AppFactory,
         *,
-        host_keys: list[str],
-        authorize: Optional[Authorizer] = None,
+        host_keys: Sequence[object],
+        auth: Optional[AuthPolicy] = None,
+        allow_anonymous: bool = False,
     ) -> None:
+        if auth is None:
+            if not allow_anonymous:
+                raise ValueError(
+                    "WijjitSSH requires an auth policy. Pass auth=... (see "
+                    "wijjit_ssh.auth: AuthorizedKeys, PasswordAuth, ChainAuth), "
+                    "or pass allow_anonymous=True to run with NO authentication "
+                    "- which lets anyone connect as any username, and must never "
+                    "be used on an untrusted network."
+                )
+            auth = OpenAuth()
+
+        if not auth.auth_required(""):
+            logger.warning(
+                "SERVER IS UNAUTHENTICATED: any client may connect as any "
+                "username. This is for development only - do not expose it."
+            )
+
         self._app_factory = app_factory
-        self._host_keys = host_keys
-        self._authorize = authorize
+        self._host_keys = list(host_keys)
+        self._auth = auth
 
     async def start(self, host: str = "", port: int = 8022) -> "asyncssh.SSHAcceptor":
         """Bind the listener and start accepting connections.
@@ -315,7 +432,7 @@ class WijjitSSH:
             The listening server; call ``close()`` on it to stop accepting.
         """
         return await asyncssh.create_server(
-            lambda: _WijjitSSHServer(self._app_factory, self._authorize),
+            lambda: _WijjitSSHServer(self._app_factory, self._auth),
             host,
             port,
             server_host_keys=self._host_keys,

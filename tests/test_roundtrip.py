@@ -140,11 +140,16 @@ class _Server:
 
 @pytest.fixture
 async def server() -> _Server:
-    """Start a WijjitSSH on 127.0.0.1 with a throwaway host key."""
+    """Start a WijjitSSH on 127.0.0.1 with a throwaway host key.
+
+    These tests are about the transport, not the gate, so they run the server
+    open - which auth deliberately makes you say out loud. Auth itself is
+    covered in ``test_auth.py``.
+    """
     host_key = asyncssh.generate_private_key("ssh-ed25519")
-    acceptor = await WijjitSSH(make_app, host_keys=[host_key]).start(
-        host="127.0.0.1", port=0
-    )
+    acceptor = await WijjitSSH(
+        make_app, host_keys=[host_key], allow_anonymous=True
+    ).start(host="127.0.0.1", port=0)
     running = _Server(acceptor)
     yield running
     running.close()
@@ -300,9 +305,9 @@ async def test_bad_app_factory_reports_instead_of_dropping(server: _Server) -> N
         raise RuntimeError("kaboom")
 
     host_key = asyncssh.generate_private_key("ssh-ed25519")
-    acceptor = await WijjitSSH(broken_factory, host_keys=[host_key]).start(
-        "127.0.0.1", 0
-    )
+    acceptor = await WijjitSSH(
+        broken_factory, host_keys=[host_key], allow_anonymous=True
+    ).start("127.0.0.1", 0)
     broken = _Server(acceptor)
     try:
         client = await _open(broken)

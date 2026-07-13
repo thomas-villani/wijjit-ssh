@@ -2,8 +2,8 @@
 
 Run it::
 
-    ssh-keygen -f ssh_host_key -N ''          # once, to make a host key
-    uv run python examples/hello_ssh.py       # starts the server on :8022
+    ssh-keygen -t ed25519 -f ssh_host_key -N ''   # once, to make a host key
+    uv run python examples/hello_ssh.py           # starts the server on :8022
 
 Then from another terminal::
 
@@ -11,13 +11,21 @@ Then from another terminal::
 
 You land straight in a live Wijjit TUI - a text field and a counter - served
 over SSH. Every connection gets its own independent app instance and state.
+
+Authentication: if you have a ``~/.ssh/authorized_keys``, this serves public-key
+auth against it (the recommended setup). If you do not, it falls back to *no
+authentication* so the demo still runs - and says so loudly. wijjit-ssh will not
+run unauthenticated unless you ask for it in as many words, which is why the
+fallback has to pass ``allow_anonymous=True``.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from wijjit import Wijjit, render_template_string
 
-from wijjit_ssh import SSHSession, WijjitSSH
+from wijjit_ssh import AuthorizedKeys, SSHSession, WijjitSSH
 
 TEMPLATE = """
 {% frame title="Wijjit over SSH" %}
@@ -56,8 +64,27 @@ def make_app(session: SSHSession) -> Wijjit:
     return app
 
 
+def build_server() -> WijjitSSH:
+    """Prefer public-key auth; fall back to open auth so the demo always runs."""
+    authorized_keys = Path.home() / ".ssh" / "authorized_keys"
+
+    if authorized_keys.is_file():
+        print(f"Public-key auth against {authorized_keys}")
+        return WijjitSSH(
+            make_app,
+            host_keys=["ssh_host_key"],
+            auth=AuthorizedKeys(authorized_keys),
+        )
+
+    print(
+        f"WARNING: no {authorized_keys} found - running with NO AUTHENTICATION.\n"
+        "         Anyone who can reach this port can connect as any username.\n"
+        "         Fine on localhost; never do this on a real network."
+    )
+    return WijjitSSH(make_app, host_keys=["ssh_host_key"], allow_anonymous=True)
+
+
 if __name__ == "__main__":
-    # WARNING: open auth (any username, no password). Do not expose publicly.
-    server = WijjitSSH(make_app, host_keys=["ssh_host_key"])
+    server = build_server()
     print("Wijjit SSH server listening on port 8022 (ssh -p 8022 you@localhost)")
     server.run(port=8022)
