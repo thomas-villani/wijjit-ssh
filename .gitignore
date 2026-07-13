@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtualenvs
+.venv/
+.venv-wsl/
+venv/
+
+# uv
+.uv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# SSH host keys (never commit private keys)
+*.key
+host_key*
+known_hosts
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
