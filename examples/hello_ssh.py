@@ -20,18 +20,16 @@ from wijjit import Wijjit, render_template_string
 from wijjit_ssh import SSHSession, WijjitSSH
 
 TEMPLATE = """
-<vstack gap="1" padding="1">
-  <frame title="Wijjit over SSH">
-    <vstack gap="1" padding="1">
-      <text>Hello, {{ username }}! Your terminal is {{ cols }}x{{ rows }}.</text>
-      <text>Type your name and press Enter:</text>
-      <textinput id="name" placeholder="name..." />
-      <text>Greeted {{ count }} time(s).</text>
-      <button id="greet">Greet</button>
-      <text dim="true">Ctrl+Q to disconnect.</text>
-    </vstack>
-  </frame>
-</vstack>
+{% frame title="Wijjit over SSH" %}
+  {% vstack spacing=1 %}
+    {% text %}Hello, {{ username }}! Your terminal is {{ cols }}x{{ rows }}.{% endtext %}
+    {% text %}Type your name, then press the button:{% endtext %}
+    {% textinput id="name" placeholder="name..." %}{% endtextinput %}
+    {% text %}Greeted {{ count }} time(s).{% endtext %}
+    {% button action="greet" %}Greet{% endbutton %}
+    {% text %}Ctrl+Q to disconnect.{% endtext %}
+  {% endvstack %}
+{% endframe %}
 """
 
 

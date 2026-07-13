@@ -1,12 +1,14 @@
 # wijjit-ssh
 
-**Flask for SSH apps.** Serve [Wijjit](../) TUI applications over SSH: Wijjit
-draws the UI, `asyncssh` handles the transport and PTY, and every connection
-gets its own live app instance.
+**Flask for SSH apps.** Serve [Wijjit](https://github.com/tomvillani/wijjit) TUI
+applications over SSH: Wijjit draws the UI, `asyncssh` handles the transport and
+PTY, and every connection gets its own live app instance.
 
-> Status: **prototype / sketch.** The core transport seam it builds on
+> Status: **early.** The core transport seam it builds on
 > (`wijjit.terminal.backend.TerminalBackend`) is in Wijjit proper; this package
-> is the reference backend + server glue. See "Not yet hardened" below.
+> is the reference backend + server glue. The input path is production-shaped
+> (async byte decoder, no threads); auth and resource limits are not done yet.
+> See "Not yet hardened" below.
 
 ```python
 from wijjit import Wijjit, render_template_string
@@ -17,7 +19,7 @@ def make_app(session: SSHSession) -> Wijjit:
     @app.view("main", default=True)
     def main():
         return render_template_string(
-            "<vstack padding='1'><text>Hi {{ who }}!</text></vstack>",
+            "{% frame %}{% text %}Hi {{ who }}!{% endtext %}{% endframe %}",
             who=session.username,
         )
     return app
@@ -52,12 +54,34 @@ Because Wijjit's render context and the terminal-size override are
 **contextvar-based**, N concurrent sessions of different sizes coexist in one
 process without stepping on each other - each runs as its own asyncio task.
 
+## Done
+
+- **Async byte-decoded input.** Raw channel bytes are decoded into Wijjit
+  key/mouse events on the event loop - no thread and no prompt_toolkit pipe per
+  session. Handles split escape sequences, split UTF-8 runes, SGR + legacy
+  mouse, bracketed paste, and the lone-ESC ambiguity. (`wijjit_ssh.input`)
+- **Binary channel** (`encoding=None`): the decoder sees exactly what the client
+  sent.
+- **Per-session isolation.** N concurrent sessions, each with its own app, state,
+  and terminal size, in one process and one event loop.
+
 ## Not yet hardened
 
 - **Auth is open by default** (any username, no credential). Wire real
-  key/password auth before exposing this anywhere untrusted.
-- One input reader thread per session; a byte-parsing input path would drop it.
+  key/password auth before exposing this anywhere untrusted. *(next milestone)*
+- **No resource limits**: no max-sessions cap, per-IP cap, or idle timeout.
 - Blocking sync handlers stall that session's frames - give CPU-bound apps an
   executor.
-- Channel I/O is utf-8 text; a strict binary path would use `encoding=None`.
+
+See [`SPEC.md`](SPEC.md) for the full plan and remaining milestones.
+
+## Development
+
+```bash
+uv venv && uv pip install -e . --no-deps
+uv pip install pytest pytest-asyncio pyte black ruff mypy
+uv run pytest                     # 175 tests
 ```
+
+Wijjit is not on PyPI yet, so install it editable alongside:
+`uv pip install -e ../wijjit`.

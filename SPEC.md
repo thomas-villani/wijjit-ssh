@@ -1,11 +1,16 @@
 # wijjit-ssh — Implementation Spec
 
-Status: **draft**. This document specifies the work to take `wijjit-ssh` from
-the current prototype (a working `RemoteTerminalBackend` + a minimal
-`WijjitSSH` server, verified with a real asyncssh round trip) to something you
-could actually deploy: a real async byte-parser input path, pluggable
-authentication, terminal-capability negotiation, resource limits, graceful
-shutdown, logging, tests, and packaging.
+Status: **in progress — M1 done.** This document specifies the work to take
+`wijjit-ssh` from the original prototype to something you could actually deploy:
+a real async byte-parser input path, pluggable authentication,
+terminal-capability negotiation, resource limits, graceful shutdown, logging,
+tests, and packaging.
+
+**M1 (the async byte-parser input path) is implemented** — see §4, which is now
+a description of the code rather than a plan. The reader thread and the
+prompt_toolkit pipe are gone; the channel is binary; 175 tests cover the
+decoder and a real client-server round trip. Everything from §5 (auth) onward
+is still to do.
 
 It is deliberately concrete — interface signatures, file layout, and phased
 milestones — so it can be read top-to-bottom to understand the whole design,
@@ -53,11 +58,19 @@ context and terminal-size override are **contextvar-based and task-local**, so
 concurrent sessions never collide. `owns_terminal=False` on the backend keeps
 the app from installing any process-global signal/atexit/suspend handlers.
 
-The prototype takes two shortcuts this spec removes:
-1. Input goes through a prompt_toolkit **pipe input + reader thread** (one
-   thread per session). → Replace with an async byte parser (§4).
-2. The channel is opened in **UTF-8 text mode**. → Switch to raw bytes
-   (`encoding=None`) so the parser sees exactly what the client sent (§6).
+The prototype took two shortcuts, **both now removed (M1)**:
+1. ~~Input goes through a prompt_toolkit pipe input + reader thread (one thread
+   per session).~~ Replaced by an async byte parser on the event loop (§4). No
+   threads, no prompt_toolkit, in the remote path.
+2. ~~The channel is opened in UTF-8 text mode.~~ The channel is now binary
+   (`encoding=None`), so the decoder sees exactly what the client sent (§6).
+
+One core change fell out of M1: `TerminalBackend.create_input_handler` used to
+be typed as returning the concrete `InputHandler`, which contradicted the seam's
+whole purpose. Wijjit core now defines an `InputSource` **Protocol**
+(`wijjit.terminal.backend`) describing the six members the event loop actually
+calls; `InputHandler` and `ChannelInputSource` both satisfy it structurally.
+This is what §4.2 below always assumed, now enforced by the type system.
 
 ---
 
@@ -70,22 +83,22 @@ wijjit-ssh/
   SPEC.md                     (this file)
   src/wijjit_ssh/
     __init__.py               public API
-    server.py                 WijjitSSH, session glue (asyncssh callbacks)
-    backend.py                RemoteTerminalBackend  (bytes I/O + size)
-    input.py                  ChannelInputSource + KeyDecoder  (NEW, §4)
-    auth.py                   AuthPolicy + presets                 (NEW, §5)
-    keys.py                   host-key loading/generation          (NEW, §7)
-    limits.py                 SessionRegistry, timeouts, rate limit (NEW, §8)
-    config.py                 ServerConfig dataclass               (NEW, §10)
-    logging.py                structured per-session logging       (NEW, §9)
+    server.py                 WijjitSSH, session glue (asyncssh callbacks)  [done]
+    backend.py                RemoteTerminalBackend  (bytes I/O + size)     [done]
+    input.py                  ChannelInputSource + KeyDecoder  (§4)         [done]
+    auth.py                   AuthPolicy + presets                 (TODO, §5)
+    keys.py                   host-key loading/generation          (TODO, §7)
+    limits.py                 SessionRegistry, timeouts, rate limit (TODO, §8)
+    config.py                 ServerConfig dataclass               (TODO, §10)
+    logging.py                structured per-session logging       (TODO, §9)
   examples/
-    hello_ssh.py              current minimal demo
-    dashboard_ssh.py          auth + multiple views (NEW)
+    hello_ssh.py              minimal demo                                  [done]
+    dashboard_ssh.py          auth + multiple views (TODO)
   tests/
-    test_input_decoder.py     table-driven byte→Key/Mouse (NEW)
-    test_auth.py              (NEW)
-    test_roundtrip.py         in-process client↔server (promote scratch) (NEW)
-    test_limits.py            (NEW)
+    test_input_decoder.py     table-driven byte->Key/Mouse (165 cases)      [done]
+    test_roundtrip.py         in-process client<->server (10 tests)         [done]
+    test_auth.py              (TODO)
+    test_limits.py            (TODO)
 ```
 
 ---
@@ -338,15 +351,26 @@ cancel remaining tasks, close the listener.
 
 ## 11. Testing strategy
 
-- **`test_input_decoder.py`** — the priority. Table-driven `bytes → [events]`
-  for: ASCII, Ctrl+letters, all arrows (CSI + SS3), Home/End/PgUp/Dn/Del,
-  F1–F12, modified keys (`ESC[1;5A`), SGR + X10 mouse, bracketed paste, split
-  UTF-8, and split escape sequences fed one byte at a time. Pure, fast, no I/O.
-- **`test_roundtrip.py`** — promote the scratch verification: in-process
-  asyncssh client ↔ `WijjitSSH`, generated host key, `known_hosts=None`. Assert
-  the initial frame reaches the client, a keystroke mutates state and the next
-  frame reflects it, resize reflows, Ctrl+Q disconnects. Cover auth paths
-  (pubkey accept/reject, password accept/reject).
+- **`test_input_decoder.py`** — the priority. **[done: 165 cases]** Table-driven
+  `bytes → [events]` for: ASCII, Ctrl+letters, all arrows (CSI + SS3),
+  Home/End/PgUp/Dn/Del, F1–F12, modified keys (`ESC[1;5A`), SGR + X10 mouse,
+  bracketed paste, split UTF-8, malformed/hostile input, and *every* case
+  re-run one byte at a time to prove resumability. Pure, fast, no I/O.
+- **`test_roundtrip.py`** — **[done: 10 tests]** in-process asyncssh client ↔
+  `WijjitSSH`, generated host key, `known_hosts=None`. Covers initial frame,
+  keystrokes, UTF-8, split escape sequences, the lone-ESC timer, resize,
+  Ctrl+Q disconnect, a failing app factory, and two concurrent differently-sized
+  sessions. Auth paths get added with §5.
+
+  > **Trap worth knowing.** The client side must run a real VT emulator
+  > (`pyte`), not `strip_ansi()` over the accumulated bytes. Wijjit uses a
+  > **diff** renderer: after the first frame it re-sends only the cells that
+  > changed, addressed by cursor position. So the wire carries a transcript, not
+  > a picture — after a counter goes `N 0` → `N 1`, the bytes contain a bare
+  > `1`, and asserting `"N 1" in text` never matches even though the client's
+  > screen plainly reads `N 1`. Feeding the stream through `pyte` reconstructs
+  > what the user actually sees, and has the bonus of validating that our escape
+  > sequences are well-formed, since a real emulator has to accept them.
 - **`test_auth.py`** — each preset in isolation with fake asyncssh callbacks.
 - **`test_limits.py`** — max_sessions rejection, per-IP cap, idle timeout fires.
 - **Concurrency smoke** — open K simultaneous clients with different sizes;
@@ -374,9 +398,11 @@ cancel remaining tasks, close the listener.
 
 ## 13. Milestones
 
-- **M1 — Byte parser.** `KeyDecoder` + `ChannelInputSource`; switch backend to
-  `encoding=None`; drop the reader thread. Unit tests green. *No behavior
-  change visible to apps; removes the thread-per-session cost.*
+- **M1 — Byte parser. [DONE]** `KeyDecoder` + `ChannelInputSource`; backend
+  switched to `encoding=None`; reader thread and prompt_toolkit pipe dropped from
+  the remote path. 175 tests green; black/ruff/mypy-strict clean. Core gained the
+  `InputSource` protocol (§2). Also hardened: a raising app factory now reports
+  to the client and logs, instead of dropping the connection silently.
 - **M2 — Auth.** `AuthPolicy` + presets; fail-closed default; `test_auth.py`.
 - **M3 — Robust lifecycle.** `keys.py`, `limits.py`, graceful shutdown,
   per-session logging, idle/keepalive.

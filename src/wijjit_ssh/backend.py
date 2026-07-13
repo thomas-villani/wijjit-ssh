@@ -5,9 +5,9 @@ runs an ordinary Wijjit app against an ``asyncssh`` session instead of the local
 console. It:
 
 * writes rendered frames and screen-control sequences to the SSH channel,
-* feeds inbound channel bytes into Wijjit's normal key/mouse parser via a
-  prompt_toolkit pipe input (so every element behaves exactly as it does
-  locally), and
+* decodes inbound channel bytes into Wijjit key/mouse events on the event loop
+  (see :mod:`wijjit_ssh.input`), so every element behaves exactly as it does
+  locally, and
 * reports the client's negotiated PTY size (refreshed on ``SIGWINCH``-style
   resize events) as a task-local override, so many differently-sized sessions
   coexist in one server process.
@@ -17,13 +17,9 @@ process-global terminal machinery (SIGTERM/SIGHUP/atexit restore, SIGTSTP
 suspend) - there is no local tty to restore, and those handlers are
 process-global and would collide across concurrent sessions.
 
-.. note::
-
-   Prototype. Rough edges intentionally left for hardening: it decodes channel
-   data as text (fine for typed input and CSI/SGR escape sequences, but a true
-   binary path would open the channel with ``encoding=None``); and each session
-   carries its own input reader thread via
-   :class:`~wijjit.terminal.input.InputHandler`.
+The channel is opened in **binary mode** (``encoding=None`` on the server), so
+inbound data arrives as raw bytes for the decoder and outbound frames are
+encoded here, at the one boundary where text becomes wire bytes.
 """
 
 from __future__ import annotations
@@ -31,17 +27,19 @@ from __future__ import annotations
 from typing import TextIO
 
 from wijjit.terminal.backend import TerminalBackend
-from wijjit.terminal.input import InputHandler
 from wijjit.terminal.mouse import MouseTrackingMode
+
+from wijjit_ssh.input import ChannelInputSource
 
 
 class _ChannelWriter:
-    """Minimal text stream that writes to an ``asyncssh`` channel.
+    """Text stream that encodes onto a binary ``asyncssh`` channel.
 
     Presents the ``write``/``flush`` surface that
     :class:`~wijjit.terminal.screen.ScreenManager` and
-    :class:`~wijjit.terminal.input.InputHandler` expect. ``flush`` is a no-op:
-    ``asyncssh`` channels buffer and drain on the event loop themselves.
+    :class:`~wijjit_ssh.input.ChannelInputSource` expect, while the channel
+    underneath is binary. ``flush`` is a no-op: ``asyncssh`` channels buffer and
+    drain on the event loop themselves.
 
     Parameters
     ----------
@@ -53,11 +51,18 @@ class _ChannelWriter:
         self._chan = chan
 
     def write(self, data: str) -> None:
-        # asyncssh encodes str per the channel's encoding (utf-8 by default),
-        # which preserves ANSI escape bytes. Silently drop writes once the peer
-        # has gone so a final frame racing connection loss can't crash the loop.
+        """Encode and write terminal output to the channel.
+
+        Parameters
+        ----------
+        data : str
+            Frame or control-sequence text. ANSI escapes survive the UTF-8
+            encoding unchanged (they are ASCII).
+        """
+        # Silently drop writes once the peer has gone, so a final frame racing
+        # connection loss cannot crash the session's task.
         try:
-            self._chan.write(data)  # type: ignore[attr-defined]
+            self._chan.write(data.encode("utf-8", errors="replace"))  # type: ignore[attr-defined]
         except (BrokenPipeError, ConnectionError, OSError):
             pass
 
@@ -72,10 +77,6 @@ class RemoteTerminalBackend(TerminalBackend):
     ----------
     chan : asyncssh.SSHServerChannel
         The client's session channel; frames are written here.
-    pipe_input : prompt_toolkit.input.PipeInput
-        Pipe input that inbound channel bytes are fed into (see :meth:`feed`).
-        Wijjit's :class:`~wijjit.terminal.input.InputHandler` reads from it just
-        as it would from real stdin.
     columns : int
         Initial terminal width negotiated by the PTY request.
     lines : int
@@ -89,17 +90,11 @@ class RemoteTerminalBackend(TerminalBackend):
     # size override so render/layout track this client's dimensions.
     provides_size = True
 
-    def __init__(
-        self,
-        chan: object,
-        pipe_input: object,
-        columns: int,
-        lines: int,
-    ) -> None:
+    def __init__(self, chan: object, columns: int, lines: int) -> None:
         self._writer = _ChannelWriter(chan)
-        self._pipe_input = pipe_input
         self._columns = columns
         self._lines = lines
+        self._input: ChannelInputSource | None = None
 
     @property
     def screen_output(self) -> TextIO | None:
@@ -117,27 +112,50 @@ class RemoteTerminalBackend(TerminalBackend):
         *,
         enable_mouse: bool,
         mouse_tracking_mode: MouseTrackingMode | None,
-    ) -> InputHandler:
-        # Reuse Wijjit's real InputHandler, but sourced from the SSH pipe and
-        # sinking mouse-enable sequences back to the channel.
-        return InputHandler(
-            enable_mouse=enable_mouse,
-            mouse_tracking_mode=mouse_tracking_mode,
-            input=self._pipe_input,
-            output=self._writer,
-        )
+    ) -> ChannelInputSource:
+        """Build this session's input source.
 
-    # -- transport-side hooks (called by the SSH session, not by Wijjit) --------
-
-    def feed(self, data: str) -> None:
-        """Push inbound channel data into the input pipe.
+        Called once by :class:`~wijjit.core.app.Wijjit` during construction. The
+        instance is retained so :meth:`feed` can route inbound channel bytes to
+        it.
 
         Parameters
         ----------
-        data : str
-            Bytes received on the channel, decoded as text by asyncssh.
+        enable_mouse : bool
+            Whether the app wants mouse tracking.
+        mouse_tracking_mode : MouseTrackingMode or None
+            Requested tracking granularity.
+
+        Returns
+        -------
+        ChannelInputSource
+            An input source fed by this channel's byte stream.
         """
-        self._pipe_input.send_text(data)  # type: ignore[attr-defined]
+        self._input = ChannelInputSource(
+            self._writer,  # type: ignore[arg-type]
+            enable_mouse=enable_mouse,
+            mouse_tracking_mode=mouse_tracking_mode,
+        )
+        return self._input
+
+    # -- transport-side hooks (called by the SSH session, not by Wijjit) --------
+
+    def feed(self, data: bytes) -> None:
+        """Push inbound channel bytes into the input decoder.
+
+        Parameters
+        ----------
+        data : bytes
+            Raw bytes received on the channel.
+
+        Notes
+        -----
+        A no-op until the app has been constructed (which is what creates the
+        input source), so data racing session startup is dropped rather than
+        crashing the session.
+        """
+        if self._input is not None:
+            self._input.feed(data)
 
     def resize(self, columns: int, lines: int) -> None:
         """Record a new client terminal size.

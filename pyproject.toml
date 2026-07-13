@@ -20,5 +20,28 @@ dependencies = [
 Homepage = "https://github.com/tomvillani/wijjit-ssh"
 Wijjit = "https://github.com/tomvillani/wijjit"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "black>=24.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/wijjit_ssh"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.black]
+line-length = 88
+
+[tool.ruff]
+line-length = 88
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
