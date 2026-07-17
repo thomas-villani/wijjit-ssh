@@ -1,6 +1,6 @@
 # wijjit-ssh
 
-**Flask for SSH apps.** Serve [Wijjit](https://github.com/tomvillani/wijjit) TUI
+**Flask for SSH apps.** Serve [Wijjit](https://github.com/thomas-villani/wijjit) TUI
 applications over SSH: Wijjit draws the UI, `asyncssh` handles the transport and
 PTY, and every connection gets its own live app instance.
 
@@ -230,17 +230,26 @@ See [`spec.md`](spec.md) for the full plan and remaining milestones.
 
 ## Development
 
-Wijjit is not on PyPI yet, so install it editable alongside:
+Wijjit is not on PyPI yet, so `pyproject.toml` points `uv` at a sibling checkout
+via `[tool.uv.sources]`. Clone the two repos side by side:
 
-```bash
-uv venv
-uv pip install -e ../wijjit          # the core library
-uv pip install -e . --no-deps
-uv pip install pytest pytest-asyncio pyte black ruff mypy
-
-uv run --no-sync pytest              # 333 tests
-uv run --no-sync ruff check src/ && uv run --no-sync mypy src/
+```
+PycharmProjects/
+  wijjit/        # github.com/thomas-villani/wijjit
+  wijjit-ssh/    # this repo
 ```
 
-`--no-sync` is needed until `wijjit` is published: `uv` would otherwise try to
-resolve `wijjit>=0.1.0` from PyPI and fail.
+```bash
+uv sync                  # installs wijjit editable from ../wijjit
+uv run pytest            # 334 tests
+uv run ruff check src/ && uv run mypy src/
+```
+
+The source is **editable and a path, not a git ref**, on purpose: the two
+libraries are developed in tandem, so changes to `../wijjit` are picked up here
+immediately with no reinstall. A git source would test against whatever was last
+pushed instead.
+
+Once `wijjit` is published, delete the `[tool.uv.sources]` section - the
+dependency pin already says what it needs. (`uv` strips that section from
+published metadata, so it never affects anyone installing the package.)

@@ -17,8 +17,23 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/tomvillani/wijjit-ssh"
-Wijjit = "https://github.com/tomvillani/wijjit"
+Homepage = "https://github.com/thomas-villani/wijjit-ssh"
+Wijjit = "https://github.com/thomas-villani/wijjit"
+
+[tool.uv.sources]
+# wijjit is not published yet, so uv cannot resolve `wijjit>=0.1.0` from PyPI
+# and every `uv run` would fail. Point it at the sibling checkout instead.
+#
+# Editable, and deliberately a path rather than a git ref: the two libraries are
+# developed in tandem, so wijjit-ssh's tests should run against the working tree
+# next door. A git source would test against whatever was last pushed, and make
+# every wijjit change need a commit before this repo could see it.
+#
+# Assumes the layout the README documents (wijjit and wijjit-ssh side by side).
+# Delete this section once wijjit is on PyPI - the dependency pin already says
+# what it needs. uv strips [tool.uv.sources] from published metadata, so this
+# never reaches anyone installing the package.
+wijjit = { path = "../wijjit", editable = true }
 
 [dependency-groups]
 dev = [
