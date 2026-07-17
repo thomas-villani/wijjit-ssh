@@ -573,6 +573,10 @@ class _WijjitSSHServer(asyncssh.SSHServer):
         self._live = live
         self._conn: asyncssh.SSHServerConnection | None = None
         self._peer_ip: str = "unknown"
+        # Cached at connection_made: asyncssh drops peername once the transport
+        # is gone, so reading it lazily would log "Connection closed from None"
+        # - losing the address on the one line most likely to be grepped for.
+        self._peer_name: str = "unknown"
         self._counted = False
 
     def disconnect(self, message: str) -> None:
@@ -585,6 +589,7 @@ class _WijjitSSHServer(asyncssh.SSHServer):
     def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
         self._conn = conn
         self._peer_ip = self._peer_address()
+        self._peer_name = self._read_peer_name()
 
         rejection = self._registry.check_connection(self._peer_ip)
         if rejection is not None:
@@ -647,14 +652,18 @@ class _WijjitSSHServer(asyncssh.SSHServer):
             return str(peer[0])
         return str(peer)
 
-    def _peer(self) -> str:
-        """The client's address, for logs."""
-        if self._conn is None:
+    def _read_peer_name(self) -> str:
+        """Read the client's ``host:port`` off the live transport."""
+        if self._conn is None:  # pragma: no cover - defensive
             return "unknown"
         peer = self._conn.get_extra_info("peername")
         if isinstance(peer, tuple) and len(peer) >= 2:
             return f"{peer[0]}:{peer[1]}"
-        return str(peer)
+        return str(peer) if peer else "unknown"
+
+    def _peer(self) -> str:
+        """The client's address, for logs. Valid after the transport is gone."""
+        return self._peer_name
 
     # -- authentication (delegated to the policy) --------------------------------
 

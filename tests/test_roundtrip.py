@@ -1,13 +1,19 @@
 """End-to-end tests: a real asyncssh client against a real WijjitSSH server.
 
 Everything here runs in-process over the loopback interface with a generated
-host key, so there is no fixture setup and nothing to clean up. These are the
-tests that prove the whole stack actually works: PTY negotiation, the byte
-decoder, frame delivery, resize, and per-session isolation.
+host key. These are the tests that prove the whole stack actually works: PTY
+negotiation, the byte decoder, frame delivery, resize, per-session isolation,
+and that the limits from ``limits.py`` are really wired to asyncssh's callbacks.
 
-The decoder's own semantics are covered exhaustively (and much faster) in
-``test_input_decoder.py``; these tests exist to prove the wiring, not the
-parsing.
+The split is deliberate. The decoder's semantics are covered exhaustively (and
+much faster) in ``test_input_decoder.py``, and the limits' semantics in
+``test_limits.py`` with an injected clock. These tests exist to prove the wiring,
+not the logic - which is why the timeouts here are generous and the assertions
+are coarse.
+
+The client machinery lives in ``_client.py``; read its docstring before writing
+an assertion about output, because Wijjit's diff renderer means the byte stream
+is a transcript rather than a picture.
 """
 
 from __future__ import annotations
@@ -15,186 +21,11 @@ from __future__ import annotations
 import asyncio
 
 import asyncssh
-import pyte
 import pytest
-from wijjit import Wijjit, render_template_string
-from wijjit.terminal.size import get_terminal_size
+from wijjit import Wijjit
 
+from tests._client import _Server, _open
 from wijjit_ssh import SSHSession, WijjitSSH
-
-TEMPLATE = """
-{% vstack %}
-  {% text %}USER {{ who }} SIZE {{ cols }}x{{ rows }} N {{ n }} {{ tag }}{% endtext %}
-{% endvstack %}
-"""
-
-
-def make_app(session: SSHSession) -> Wijjit:
-    """Build the app under test for one connection."""
-    app = Wijjit(backend=session.backend, initial_state={"n": 0, "tag": "-"})
-
-    @app.view("main", default=True)
-    def main():
-        # Read the size live rather than from `session`, so a resize is visible.
-        # This also exercises the task-local size override: each concurrent
-        # session must observe its own dimensions here.
-        size = get_terminal_size()
-        return render_template_string(
-            TEMPLATE,
-            who=session.username,
-            cols=size.columns,
-            rows=size.lines,
-            n=app.state["n"],
-            tag=app.state["tag"],
-        )
-
-    @app.on_key("x")
-    def bump(event=None):
-        app.state["n"] += 1
-
-    @app.on_key("escape")
-    def escaped(event=None):
-        app.state["tag"] = "ESC"
-
-    @app.on_key("up")
-    def arrow(event=None):
-        app.state["tag"] = "UP"
-
-    # No Ctrl+Q handler: Wijjit reserves that key to quit the app, and binding
-    # it raises. test_app_quit_closes_the_session relies on the built-in.
-    return app
-
-
-class _Collector(asyncssh.SSHClientSession):
-    """Client session that renders what the server sends into a real screen.
-
-    Wijjit ships a *diff* renderer: after the first frame it re-sends only the
-    cells that changed, addressed by cursor position. So the byte stream is a
-    transcript, not a picture - concatenating it and stripping ANSI would show
-    the initial frame plus a scattering of single characters, and an assertion
-    like ``"N 1" in text`` would never match even though the client's screen
-    plainly reads ``N 1``.
-
-    Feeding the stream through a VT emulator reconstructs the screen the user
-    actually sees, which is the only thing worth asserting on - and it validates
-    that our escape sequences are well-formed, since a real emulator has to
-    accept them.
-    """
-
-    def __init__(self, columns: int = 80, lines: int = 24) -> None:
-        self.screen_buffer = pyte.Screen(columns, lines)
-        self.stream = pyte.Stream(self.screen_buffer)
-        self.closed = asyncio.Event()
-
-    def data_received(self, data: bytes, datatype: object) -> None:
-        self.stream.feed(data.decode("utf-8", errors="replace"))
-
-    def connection_lost(self, exc: Exception | None) -> None:
-        self.closed.set()
-
-    def resize(self, columns: int, lines: int) -> None:
-        """Match the emulator to a new terminal size (rows first, as pyte wants)."""
-        self.screen_buffer.resize(lines, columns)
-
-    def screen(self) -> str:
-        """The client's visible screen, as text."""
-        return "\n".join(self.screen_buffer.display)
-
-
-async def _await_text(collector: _Collector, needle: str, timeout: float = 5.0) -> str:
-    """Wait until ``needle`` shows up in the delivered output.
-
-    Parameters
-    ----------
-    collector : _Collector
-        The client session collecting frames.
-    needle : str
-        Text to wait for.
-    timeout : float, optional
-        Seconds to wait before failing.
-
-    Returns
-    -------
-    str
-        The full screen text once the needle appeared.
-    """
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        screen = collector.screen()
-        if needle in screen:
-            return screen
-        await asyncio.sleep(0.02)
-    pytest.fail(f"timed out waiting for {needle!r}\n--- got ---\n{collector.screen()}")
-
-
-class _Server:
-    """A running WijjitSSH bound to an ephemeral port."""
-
-    def __init__(self, acceptor: asyncssh.SSHAcceptor) -> None:
-        self._acceptor = acceptor
-        self.port: int = acceptor.get_port()
-
-    def close(self) -> None:
-        self._acceptor.close()
-
-
-@pytest.fixture
-async def server() -> _Server:
-    """Start a WijjitSSH on 127.0.0.1 with a throwaway host key.
-
-    These tests are about the transport, not the gate, so they run the server
-    open - which auth deliberately makes you say out loud. Auth itself is
-    covered in ``test_auth.py``.
-    """
-    host_key = asyncssh.generate_private_key("ssh-ed25519")
-    acceptor = await WijjitSSH(
-        make_app, host_keys=[host_key], allow_anonymous=True
-    ).start(host="127.0.0.1", port=0)
-    running = _Server(acceptor)
-    yield running
-    running.close()
-
-
-class _Client:
-    """An open SSH session plus the emulator showing what it renders."""
-
-    def __init__(self, conn, chan, collector: _Collector) -> None:
-        self.conn = conn
-        self.chan = chan
-        self.collector = collector
-
-    def send(self, data: bytes) -> None:
-        """Write raw bytes to the channel, exactly as a real terminal would."""
-        self.chan.write(data)
-
-    def resize(self, columns: int, lines: int) -> None:
-        self.chan.change_terminal_size(columns, lines)
-        self.collector.resize(columns, lines)
-
-    def screen(self) -> str:
-        return self.collector.screen()
-
-    async def expect(self, needle: str, timeout: float = 5.0) -> str:
-        return await _await_text(self.collector, needle, timeout)
-
-
-async def _open(
-    server: _Server,
-    username: str = "tester",
-    size: tuple[int, int] = (80, 24),
-) -> _Client:
-    """Connect, request a PTY of ``size``, and return the driving handle."""
-    columns, lines = size
-    conn = await asyncssh.connect(
-        "127.0.0.1", port=server.port, username=username, known_hosts=None
-    )
-    chan, collector = await conn.create_session(
-        lambda: _Collector(columns, lines),
-        term_type="xterm",
-        term_size=size,
-        encoding=None,
-    )
-    return _Client(conn, chan, collector)
 
 
 async def test_initial_frame_reaches_the_client(server: _Server) -> None:
@@ -294,7 +125,7 @@ async def test_app_quit_closes_the_session(server: _Server) -> None:
         await asyncio.wait_for(client.collector.closed.wait(), timeout=5.0)
 
 
-async def test_bad_app_factory_reports_instead_of_dropping(server: _Server) -> None:
+async def test_bad_app_factory_reports_instead_of_dropping() -> None:
     """A factory that raises tells the client why, rather than vanishing.
 
     Without this, a template typo or bad key binding shows up as an unexplained
@@ -305,15 +136,18 @@ async def test_bad_app_factory_reports_instead_of_dropping(server: _Server) -> N
         raise RuntimeError("kaboom")
 
     host_key = asyncssh.generate_private_key("ssh-ed25519")
-    acceptor = await WijjitSSH(
-        broken_factory, host_keys=[host_key], allow_anonymous=True
-    ).start("127.0.0.1", 0)
-    broken = _Server(acceptor)
+    wijjit_ssh = WijjitSSH(broken_factory, host_keys=[host_key], allow_anonymous=True)
+    acceptor = await wijjit_ssh.start("127.0.0.1", 0)
+    broken = _Server(acceptor, wijjit_ssh)
     try:
         client = await _open(broken)
         async with client.conn:
             await client.expect("Failed to start application")
             assert "kaboom" in client.screen()
+        # The slot taken at session_requested must be given back, or a broken
+        # factory would leak capacity one failed connection at a time.
+        await asyncio.sleep(0.1)
+        assert wijjit_ssh.active_sessions == 0
     finally:
         broken.close()
 
@@ -338,3 +172,215 @@ async def test_concurrent_sessions_are_isolated(server: _Server) -> None:
         alice.send(b"x")
         await alice.expect("N 1")
         assert "N 1" not in bob.screen()
+
+
+# -- limits, over a real socket ------------------------------------------------
+#
+# These prove the wiring only: that limits.py is actually connected to asyncssh's
+# callbacks. The limits' own semantics are pinned in test_limits.py against an
+# injected clock, which is why nothing here asserts on precise timing.
+
+
+async def test_max_sessions_refuses_with_an_explanation(serve) -> None:
+    """A refused session must say why, not just fail to open.
+
+    Returning falsy from session_requested would give the user a bare
+    "Session refused" protocol error; this is why _RejectedSession exists.
+    """
+    server = await serve(max_sessions=1)
+    first = await _open(server)
+    async with first.conn:
+        await first.expect("USER tester")
+        assert server.server.active_sessions == 1
+
+        second = await _open(server)
+        async with second.conn:
+            screen = await second.expect("at capacity")
+            assert "1 sessions" in screen
+
+
+async def test_a_freed_slot_admits_the_next_session(serve) -> None:
+    server = await serve(max_sessions=1)
+    first = await _open(server)
+    await first.expect("USER tester")
+
+    first.conn.close()
+    await first.wait_closed()
+    await asyncio.sleep(0.2)
+    assert server.server.active_sessions == 0
+
+    second = await _open(server)
+    async with second.conn:
+        await second.expect("USER tester")  # admitted, not refused
+
+
+async def test_the_per_ip_cap_rejects_before_authentication(serve) -> None:
+    """The peer is turned away with a reason, without a key exchange on it.
+
+    This pins the deferred-disconnect trick in _WijjitSSHServer.connection_made:
+    because the MSG_DISCONNECT waits one tick for asyncssh's version banner to go
+    out first, the client parses it properly and reports our text and
+    DISC_TOO_MANY_CONNECTIONS (12), rather than seeing a bare connection reset.
+    """
+    server = await serve(max_per_ip=1)
+    first = await _open(server)
+    async with first.conn:
+        await first.expect("USER tester")
+
+        with pytest.raises(asyncssh.DisconnectError) as excinfo:
+            await asyncio.wait_for(_open(server), timeout=10)
+
+    assert excinfo.value.code == asyncssh.DISC_TOO_MANY_CONNECTIONS
+    assert "Too many connections from your address" in str(excinfo.value)
+
+
+async def test_the_connect_rate_limit_rejects_once_the_burst_is_spent(serve) -> None:
+    server = await serve(connect_rate=0.01, connect_burst=1, max_per_ip=50)
+    first = await _open(server)
+    async with first.conn:
+        await first.expect("USER tester")
+
+        with pytest.raises(asyncssh.DisconnectError) as excinfo:
+            await asyncio.wait_for(_open(server), timeout=10)
+
+    assert "Too many connection attempts" in str(excinfo.value)
+
+
+async def test_idle_timeout_closes_a_quiet_session(serve) -> None:
+    server = await serve(idle_timeout=0.4)
+    client = await _open(server)
+    async with client.conn:
+        await client.expect("USER tester")
+        await client.wait_closed(timeout=5)
+
+    assert b"inactivity" in client.raw()
+
+
+async def test_the_idle_message_lands_outside_the_alternate_buffer(serve) -> None:
+    """The subtle one: written after the app teardown, not before.
+
+    A message written while the app still owns the screen goes inside the TUI
+    frame and is painted over by the next repaint. It is only safe to write once
+    ESC[?1049l has taken the client back to its normal screen.
+    """
+    server = await serve(idle_timeout=0.4)
+    client = await _open(server)
+    async with client.conn:
+        await client.expect("USER tester")
+        await client.wait_closed(timeout=5)
+
+    raw = client.raw()
+    assert raw.rfind(b"inactivity") > raw.rfind(b"\x1b[?1049l") > -1
+
+
+async def test_input_resets_the_idle_timer(serve) -> None:
+    """Someone who is typing is not idle."""
+    server = await serve(idle_timeout=0.5)
+    client = await _open(server)
+    async with client.conn:
+        await client.expect("USER tester")
+
+        for _ in range(5):  # keep typing for 1s, twice the idle timeout
+            await asyncio.sleep(0.2)
+            client.send(b"x")
+
+        assert not client.collector.closed.is_set(), "an active session was reaped"
+        await client.expect("N 5")
+
+
+async def test_session_timeout_closes_an_active_session(serve) -> None:
+    """Unlike idle, the absolute deadline interrupts someone mid-work."""
+    server = await serve(idle_timeout=None, session_timeout=0.5)
+    client = await _open(server)
+    async with client.conn:
+        await client.expect("USER tester")
+
+        async def keep_typing() -> None:
+            while True:
+                await asyncio.sleep(0.1)
+                client.send(b"x")
+
+        typing = asyncio.create_task(keep_typing())
+        try:
+            await client.wait_closed(timeout=5)
+        finally:
+            typing.cancel()
+
+    assert b"session limit" in client.raw()
+
+
+async def test_a_session_with_no_pty_is_turned_away(serve) -> None:
+    """`ssh host command` has no terminal for a TUI to draw on."""
+    server = await serve()
+    conn = await asyncssh.connect(
+        "127.0.0.1", port=server.port, username="tester", known_hosts=None
+    )
+    async with conn:
+        received: list[bytes] = []
+
+        class Collector(asyncssh.SSHClientSession):
+            def data_received(self, data, datatype):
+                received.append(data)
+
+        chan, _ = await conn.create_session(Collector, encoding=None)  # no term_type
+        await chan.wait_closed()
+
+    assert b"only serves interactive terminal applications" in b"".join(received)
+
+
+async def test_the_banner_reaches_the_client_before_auth(serve) -> None:
+    server = await serve(banner="Authorized users only.\n")
+    seen: list[str] = []
+
+    class BannerClient(asyncssh.SSHClient):
+        def auth_banner_received(self, msg: str, lang: str) -> None:
+            seen.append(msg)
+
+    conn, _ = await asyncssh.create_connection(
+        BannerClient,
+        "127.0.0.1",
+        port=server.port,
+        username="tester",
+        known_hosts=None,
+    )
+    async with conn:
+        assert "Authorized users only." in "".join(seen)
+
+
+async def test_lifecycle_events_reach_the_metrics_hook(serve) -> None:
+    events: list[str] = []
+    server = await serve(on_event=lambda event, fields: events.append(event))
+
+    client = await _open(server)
+    await client.expect("USER tester")
+    client.conn.close()
+    await client.wait_closed()
+    await asyncio.sleep(0.2)
+
+    assert "connection.opened" in events
+    assert "session.started" in events
+    assert "session.ended" in events
+    assert "connection.closed" in events
+
+
+async def test_the_disconnect_log_keeps_the_peer_address(
+    serve, caplog: pytest.LogCaptureFixture
+) -> None:
+    """asyncssh drops peername on teardown, so it must be cached.
+
+    Read lazily, connection_lost logs "Connection closed from None" -- losing the
+    address on the one line you would most want to grep for.
+    """
+    server = await serve()
+    client = await _open(server)
+    await client.expect("USER tester")
+
+    with caplog.at_level("INFO", logger="wijjit_ssh"):
+        client.conn.close()
+        await client.wait_closed()
+        await asyncio.sleep(0.2)
+
+    closed = [r.message for r in caplog.records if "Connection closed" in r.message]
+    assert closed, "no disconnect was logged"
+    assert "from None" not in closed[0]
+    assert "127.0.0.1:" in closed[0]

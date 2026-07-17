@@ -1,6 +1,6 @@
 # wijjit-ssh — Implementation Spec
 
-Status: **in progress — M1 and M2 done.** This document specifies the work to
+Status: **in progress — M1, M2 and M3 done.** This document specifies the work to
 take `wijjit-ssh` from the original prototype to something you could actually
 deploy: a real async byte-parser input path, pluggable authentication,
 terminal-capability negotiation, resource limits, graceful shutdown, logging,
@@ -10,14 +10,28 @@ tests, and packaging.
   prompt_toolkit pipe are gone; the channel is binary.
 - **M2 — authentication (§5).** Done. Fail-closed, pluggable, with accept *and*
   reject proven over real SSH.
+- **M3 — robust lifecycle (§7–§10).** Done. Host keys, resource limits,
+  per-session logging + metrics hook, and graceful shutdown. `ServerConfig` was
+  pulled forward from M4, since M3 introduced the twelve knobs it exists to hold.
 
-205 tests. §4 and §5 below now describe the code rather than a plan. Everything
-from §7 (host keys) onward is still to do — the big remaining gap is **resource
-limits (§8)**: nothing yet caps sessions, per-IP connections, or idle time.
+333 tests. §4, §5 and §7–§10 below now describe the code rather than a plan. The
+remaining work is **M4 (packaging/CI/docs)** and **M5 (hardening)** — the big
+remaining gap is **backpressure (§8)**: a client that stops reading still buffers
+frames in asyncssh without bound.
 
 It is deliberately concrete — interface signatures, file layout, and phased
 milestones — so it can be read top-to-bottom to understand the whole design,
 then executed phase by phase.
+
+> **Corrections folded in during M3.** Several §7–§10 items turned out to be
+> wrong when checked against asyncssh 2.24 and CPython, and have been rewritten
+> in place rather than left as aspiration. The substantive ones: a session cannot
+> be refused *with a message* by returning falsy from `session_requested` (§8);
+> per-IP limits and `max_sessions` cannot share a chokepoint, because one is
+> pre-auth and the other cannot be (§8); the idle-timeout notice has to be
+> written *after* the app's teardown, not before, or it lands inside the
+> alternate screen buffer (§8); and reusing Wijjit's `get_logger` was not merely
+> untidy but an active bug (§9).
 
 ---
 
@@ -90,18 +104,25 @@ wijjit-ssh/
     backend.py                RemoteTerminalBackend  (bytes I/O + size)     [done]
     input.py                  ChannelInputSource + KeyDecoder  (§4)         [done]
     auth.py                   AuthPolicy + presets            (§5)          [done]
-    keys.py                   host-key loading/generation          (TODO, §7)
-    limits.py                 SessionRegistry, timeouts, rate limit (TODO, §8)
-    config.py                 ServerConfig dataclass               (TODO, §10)
-    logging.py                structured per-session logging       (TODO, §9)
+    keys.py                   host-key loading/generation     (§7)          [done]
+    limits.py                 SessionRegistry, timeouts, rate limit (§8)    [done]
+    config.py                 ServerConfig dataclass          (§10)         [done]
+    logging.py                per-session logging + events    (§9)          [done]
   examples/
     hello_ssh.py              minimal demo                                  [done]
-    dashboard_ssh.py          auth + multiple views (TODO)
+    dashboard_ssh.py          auth + multiple views (TODO, M4)
   tests/
+    __init__.py               (a package, so helpers import as tests._client)
+    _client.py                pyte-backed client harness                    [done]
+    conftest.py               `serve` factory fixture                       [done]
     test_input_decoder.py     table-driven byte->Key/Mouse (165 cases)      [done]
-    test_roundtrip.py         in-process client<->server (10 tests)         [done]
+    test_roundtrip.py         in-process client<->server + limits wiring    [done]
     test_auth.py              policies + real-SSH accept/reject (30 tests)  [done]
-    test_limits.py            (TODO)
+    test_keys.py              host keys (22 tests)                          [done]
+    test_config.py            ServerConfig + resolution (31 tests)          [done]
+    test_limits.py            buckets/timers/registry, fake clock (33)      [done]
+    test_logging.py           tree containment, session logs, events (18)   [done]
+    test_shutdown.py          stop(), drain, signals (13 tests)             [done]
 ```
 
 ---
@@ -254,101 +275,230 @@ accidentally ships `OpenAuth`.
 
 ---
 
-## 7. Host keys (`keys.py`)
+## 7. Host keys (`keys.py`) — **done**
 
-- `load_host_keys(paths) -> list[SSHKey]` — load one or more host-key files;
-  clear error if missing/unreadable.
-- `ensure_host_key(path) -> SSHKey` — load, or generate + persist (0600) an
-  ed25519 key on first run, logging the fingerprint. Great DX for local/dev and
-  containers with a mounted volume.
-- Document the standard `ssh-keygen -t ed25519 -f ssh_host_key -N ''` path in
-  the README.
-- Support key rotation by accepting multiple host keys (asyncssh serves all).
+- `load_host_keys(paths) -> list[SSHKey]` — clear error if missing/unreadable,
+  naming the path (asyncssh's own `KeyImportError` says only "Invalid private
+  key", which is useless when several were passed). A missing path raises rather
+  than being skipped: skipping would serve a *different identity* than intended,
+  which every client reports as a possible attack.
+- `ensure_host_key(path) -> SSHKey` — load, or generate + persist an ed25519 key
+  on first run. Logs at **WARNING** when generating, not INFO: on a healthy
+  server it happens exactly once, and if a container's volume isn't actually
+  persistent this is the line that explains why every client suddenly reports a
+  host-key mismatch.
+- `resolve_host_keys(sources)` — normalizes paths / `PathLike` / live `SSHKey`
+  into loaded keys. This is what lets `WijjitSSH` tighten `host_keys` to
+  `Sequence[HostKeySource]` without breaking the three call styles already in
+  the tree. Resolution is eager, at construction, so a bad path fails where the
+  server is configured rather than inside `create_server`.
+- **Correction — 0600.** `SSHKey.write_private_key()` is a plain file write with
+  no mode, so it would create the key world-readable and only narrow it
+  afterwards, leaving a window where the server's identity is locally readable.
+  We write via `os.open(..., O_CREAT | O_EXCL, 0o600)` instead: private from
+  creation, and `O_EXCL` also settles the two-processes-starting-together race
+  (the loser adopts the winner's key). On Windows the mode argument is silently
+  **ignored** — the file inherits directory ACLs and `st_mode` always reads
+  `0o666` — so the permission warning is POSIX-only rather than noise.
+- Rotation works by passing multiple keys (asyncssh serves all).
+- README documents both `ssh-keygen -t ed25519 -f ssh_host_key -N ''` and
+  `ensure_host_key`.
 
 ---
 
-## 8. Concurrency, limits, lifecycle (`limits.py`)
+## 8. Concurrency, limits, lifecycle (`limits.py`) — **done except backpressure**
 
 A `SessionRegistry` tracks live sessions and enforces bounds; the server
-consults it in `session_requested`/`connection_made`.
+consults it in `connection_made`/`session_requested`. The registry is **pure**:
+no sockets, no asyncssh import, injectable clock, sessions reached only through
+a `ManagedSession` Protocol. That is what lets the real assertions be fast unit
+tests with a fake clock, leaving the over-SSH tests to prove wiring only — the
+same split §11 already uses for the decoder.
 
-- **Max concurrent sessions** (`max_sessions`): beyond the cap, refuse new
-  sessions with a message and close.
-- **Per-IP concurrency + connect rate limit** (`max_per_ip`, token bucket):
-  cheap DoS resistance. Source IP from `conn.get_extra_info('peername')`.
-- **Login grace timeout**: asyncssh `login_timeout` — drop connections that
-  authenticate too slowly.
-- **Idle timeout** (`idle_timeout`): no input for N seconds → notify + close.
-  Implemented as a per-session timer reset on each `data_received`.
-- **Absolute session timeout** (optional): hard cap on session duration.
-- **Keepalive** (`keepalive_interval`/`keepalive_count_max`) so dead TCP peers
-  are reaped.
-- **Backpressure**: if a client stops reading, `chan.write` buffers. Watch
-  `chan` drain (asyncssh `SSHWriter`/`drain`), and throttle the app's render
-  cadence for that session (or drop frames — the diff renderer self-heals on the
-  next full repaint). v0.1: cap the channel write buffer and close on sustained
-  overflow.
+- **Correction — two chokepoints, not one.** The original "per-IP concurrency +
+  connect rate limit" bullet lumped these with `max_sessions`, but they cannot
+  share a hook. Per-IP limits and the rate limit are only worth having
+  **pre-auth** — the whole point is to not spend a key exchange on an abusive
+  peer — while `max_sessions` is inherently **post-auth**, since a session only
+  exists once a channel opens. So **per-IP counts connections** and **the global
+  cap counts sessions**; per-IP sessions are bounded transitively.
+- **Max concurrent sessions** (`max_sessions`): checked in `session_requested`,
+  which is also where a session registers (not `session_started`: the username is
+  already known, and it closes the window where a client opens channels and never
+  asks for a shell).
+- **Correction — refusing "with a message"** is impossible via a falsy
+  `session_requested`, which raises `ChannelOpenError(OPEN_CONNECT_FAILED,
+  'Session refused')` with no way to attach text. A refusal is therefore a real
+  `_RejectedSession` object that writes its reason and exits(1).
+- **Correction — pre-auth rejection must be deferred** with `loop.call_soon`.
+  asyncssh calls `connection_made` one line before `_send_version()`, and
+  `MSG_DISCONNECT` is packet type 1 — below the gate that defers packets pre-kex.
+  Disconnecting inline puts a binary packet ahead of the `SSH-2.0-` banner and
+  nulls the transport out from under the banner write. Deferred by a tick, the
+  client parses it properly: verified to surface as `DisconnectError` carrying
+  our text and `DISC_TOO_MANY_CONNECTIONS`.
+- **Login grace timeout**: `login_timeout` on `create_server`. Note this is a
+  *tightening* (30s), not a new capability — asyncssh already defaults to 120s.
+- **Idle timeout** (`idle_timeout`): per-session timer reset on each
+  `data_received`.
+- **Correction — "notify + close" is the wrong order.** The app is in the
+  alternate screen buffer with a diff renderer, so a message written before the
+  app tears down lands inside the TUI frame and is painted over by the next
+  repaint. The order must be: `quit()` → await the app's teardown (which emits
+  `ESC[?1049l`) → notify → close. Pinned by a test asserting the message byte
+  offset exceeds the alt-buffer-exit offset.
+- **Absolute session timeout** (`session_timeout`, optional): a separate
+  deadline, not a bound on the idle one, since it interrupts someone actively
+  working. Off by default.
+- **Keepalive** (`keepalive_interval`/`keepalive_count_max`) reaps peers whose
+  TCP died without a FIN.
+- **Backpressure — still TODO (M5).** If a client stops reading, `chan.write`
+  buffers. Watch `chan` drain, throttle that session's render cadence (or drop
+  frames — the diff renderer self-heals on the next full repaint). The byte
+  in/out counters from §9 land here too, since they share the `_ChannelWriter`
+  seam.
 
 **Lifecycle (per session):**
 ```
-connection_made → begin_auth → (auth) → pty_requested → shell_requested
-  → session_started:  seed size override → build backend+input+app
-                      → task = loop.create_task(app.event_loop.run_async())
-  → data_received*    → decoder.feed → input queue
+connection_made → check_connection (per-IP, rate) → begin_auth (banner)
+  → (auth) → session_requested: try_admit(max_sessions) → register
+  → pty_requested → shell_requested
+  → session_started:  reject if no pty → seed size override → build
+                      backend+input+app → task = ensure_future(run_async())
+                      → task.add_done_callback → timer.start()
+  → data_received*    → timer.poke() → decoder.feed → input queue
   → terminal_size_changed* → backend.resize
-  → (app calls quit()  OR  idle/absolute timeout  OR  connection_lost)
-  → teardown: app.quit(); task cancel/await; close channel; deregister
+  → (app exits  OR  idle/absolute timeout  OR  connection_lost  OR  drain)
+  → request_close(reason, message)  [idempotent, one path down]
+  → _close: app.quit() → await task (grace) → cancel if it won't go
+            → write message → close channel → registry.release → emit
 ```
-Teardown must be idempotent and never raise into asyncssh callbacks.
+Teardown is idempotent and never raises into asyncssh callbacks.
+
+**Correction — the old teardown was wrong**, not just untidy. `connection_lost`
+called `app.quit()` and `task.cancel()` in the same tick; since `quit()` only
+sets a flag the loop checks on its next pass, the cancel always landed first and
+every session ended by cancellation. Survivable when the peer has already gone,
+wrong for idle timeout and shutdown, where the channel is alive and the app's
+`finally` is what restores the client's terminal. Relatedly, `_run_app`'s
+`finally` must **not** close the channel: that fires `connection_lost` →
+`request_close` → `_close` → `await self._task` from inside that very task
+("Task cannot await on itself"). A done callback replaces it.
 
 ---
 
-## 9. Logging & observability (`logging.py`)
+## 9. Logging & observability (`logging.py`) — **done**
 
-- Reuse Wijjit's `get_logger`. One child logger per session bound with a
-  short session id + username + peer IP (contextual `LoggerAdapter`).
-- Log lifecycle events at INFO (connect, auth ok/fail, pty, disconnect + reason,
-  duration), decode/render errors at ERROR with the session id.
-- Never log key material, passwords, or full input streams. Optionally a
-  DEBUG-gated, rate-limited input trace for troubleshooting.
-- Optional metrics hook (`on_event` callback or counters): active sessions,
-  total connections, auth failures, bytes in/out — so a deployment can wire
-  Prometheus without us depending on a metrics lib.
+- **Correction — "reuse Wijjit's `get_logger`" was an active bug**, not a style
+  choice. Wijjit's `get_logger` prefixes `"wijjit."` only `if not
+  name.startswith("wijjit")` — and `wijjit_ssh.server` *does*, so the prefix was
+  never applied and every logger here landed as a **sibling** of the `wijjit`
+  tree. `wijjit.configure_logging()` touches only the `wijjit` logger, so our
+  records inherited none of its handlers and none of its `propagate = False`,
+  including from `configure_logging(None)` — the "logging off" switch. They
+  propagated to root, found no handler, and printed to stderr via
+  `logging.lastResort`. In a process where a Wijjit TUI imports `wijjit_ssh`,
+  that sprays across the alternate screen buffer and corrupts the frame.
+  Verified before fixing; there is a regression test.
+- `wijjit_ssh` therefore owns its own tree, with the conventional library
+  posture: a `NullHandler` attached **at import** (`callHandlers` only falls back
+  to `lastResort` with zero handlers on the chain), `propagate` left **True** so
+  a host that configures root still receives us — which also keeps `caplog`
+  working, so unlike Wijjit we need no `wijjit_caplog` workaround.
+- `configure_logging()` is opt-in and defaults to silence. Only `run()` calls it
+  (to stderr, and only if neither our tree nor root has a handler), because only
+  `run()` owns the process. Same rule as signal handling.
+- `SessionLog`, a `LoggerAdapter` binding session id + username + peer IP into
+  every line. An adapter rather than a contextvar for a structural reason: the
+  asyncssh callbacks run on the *connection* task, not the app task, so a
+  contextvar set in the app task would be invisible from exactly the callbacks
+  that need to log.
+- Lifecycle at INFO (connect, auth ok/fail, session start/end + reason +
+  duration), errors at ERROR with the session id. Credentials are never logged.
+- `EventEmitter` / `on_event`: `connection.opened|closed|rejected`,
+  `auth.ok|failed`, `session.started|rejected|ended`. A raising hook is logged
+  and swallowed — a deployment's Prometheus counter must not be able to take a
+  session down from inside an asyncssh callback.
+- **Byte in/out counters deferred to M5**, where they share the
+  `_ChannelWriter` seam with backpressure and that file gets touched once.
 
 ---
 
-## 10. Server API surface (`config.py` + `server.py`)
+## 10. Server API surface (`config.py` + `server.py`) — **done**
 
 ```python
 @dataclass
 class ServerConfig:
     host: str = ""
     port: int = 8022
-    host_keys: list[str] | None = None          # paths; or use ensure_host_key
+    host_keys: Sequence[HostKeySource] = ()     # paths, PathLike, or SSHKey
     auth: AuthPolicy | None = None
     allow_anonymous: bool = False               # must be True to run OpenAuth
     max_sessions: int = 100
-    max_per_ip: int = 10
+    max_per_ip: int = 10                        # connections, not sessions (§8)
+    connect_rate: float = 0.0                   # 0 disables; opt-in
+    connect_burst: int = 20
     login_timeout: float = 30.0
     idle_timeout: float | None = 600.0
     session_timeout: float | None = None
     keepalive_interval: float = 30.0
+    keepalive_count_max: int = 3
+    shutdown_grace: float = 5.0
     banner: str | None = None                   # pre-auth SSH banner text
+    on_event: EventHook | None = None           # metrics (§9)
 
 class WijjitSSH:
     def __init__(self, app_factory: Callable[[SSHSession], Wijjit],
                  config: ServerConfig | None = None, **overrides): ...
-    async def run_async(self) -> None: ...      # serve until stop()/signal
-    def run(self) -> None: ...                   # asyncio.run wrapper
-    async def stop(self) -> None: ...            # graceful drain + close
+    async def start(self, host=None, port=None) -> asyncssh.SSHAcceptor: ...
+    async def run_async(self, host=None, port=None) -> None: ...  # until stop()
+    def run(self, host=None, port=None) -> None: ...              # owns process
+    async def stop(self, *, grace: float | None = None) -> None: ...
+    @property
+    def active_sessions(self) -> int: ...
 ```
 
-`app_factory` stays the SSH analogue of a Flask view. `SSHSession` gains
-`peer_ip`, `session_id`, `term_type` (already), `env` (if captured).
+Every limit ships with a real default: a limit that is opt-in is not a limit in
+any deployment where nobody thought about it. The exception is `connect_rate`,
+since rate-limiting an unmeasured service mostly throttles your own health check.
 
-**Graceful shutdown:** on SIGINT/SIGTERM (server owns the process here, unlike
-the apps), stop accepting, notify sessions, give them a short grace period,
-cancel remaining tasks, close the listener.
+**Correction — `host_keys: list[str] | None`** would have broken every existing
+call site; it is `Sequence[HostKeySource]` (§7).
+
+**Correction — `**overrides` needs explicit field validation.** Under mypy strict
+it is `Any`, so a typo'd `max_session=1` would be silently dropped — leaving an
+operator believing a server is bounded when it is not, which is the worst
+available failure mode for a limits API. Unknown names raise `TypeError` listing
+the valid ones.
+
+`app_factory` stays the SSH analogue of a Flask view. `SSHSession` gained
+`session_id` and `peer_ip` (`term_type` was already there; `env` is still TODO).
+
+**Graceful shutdown:** `stop()` closes the listener, drains sessions with a real
+grace period, then closes the connections underneath them, then waits for the
+listener. Idempotent under a lock; safe on a server that never started.
+
+- **Correction — draining sessions is not enough to shut down.** A session's
+  teardown closes its *channel*, but the SSH *connection* survives it and only
+  its owner can close that. Since Python 3.12 changed
+  `asyncio.Server.wait_closed()` to wait for every connection rather than just
+  the listener, `stop()` hung until each client happened to give up. A real `ssh`
+  client would have exited on channel close and masked it — which is exactly why
+  a shutdown must not depend on client goodwill. `WijjitSSH` tracks live
+  connections and disconnects them after the drain.
+- **Signals only in `run()`.** §10 was right that the server owns the process —
+  but only in `run()`. `run_async()` may be one coroutine inside a host
+  application, and installing process-global handlers from a library coroutine is
+  the same sin `owns_terminal = False` avoids in the backend. `run()` is likewise
+  the only entry point that configures logging.
+- **Correction — on Windows the "fallback" is the only path.**
+  `ProactorEventLoop` has no `add_signal_handler` at all, so `signal.signal` +
+  `call_soon_threadsafe` carries every Windows deployment. SIGTERM is never
+  delivered there (`TerminateProcess` runs no handlers) and `CTRL_C_EVENT` cannot
+  be delivered to a new process group, so the end-to-end SIGTERM test is
+  POSIX-only and the Windows path is covered by testing handler installation and
+  `_signal_stop` directly. Graceful shutdown on Windows is explicitly
+  best-effort; §12's targets are systemd and Docker.
 
 ---
 
@@ -359,11 +509,14 @@ cancel remaining tasks, close the listener.
   Home/End/PgUp/Dn/Del, F1–F12, modified keys (`ESC[1;5A`), SGR + X10 mouse,
   bracketed paste, split UTF-8, malformed/hostile input, and *every* case
   re-run one byte at a time to prove resumability. Pure, fast, no I/O.
-- **`test_roundtrip.py`** — **[done: 10 tests]** in-process asyncssh client ↔
+- **`test_roundtrip.py`** — **[done: 21 tests]** in-process asyncssh client ↔
   `WijjitSSH`, generated host key, `known_hosts=None`. Covers initial frame,
   keystrokes, UTF-8, split escape sequences, the lone-ESC timer, resize,
   Ctrl+Q disconnect, a failing app factory, and two concurrent differently-sized
-  sessions. Auth paths get added with §5.
+  sessions — plus, since M3, the limits *wiring*: max_sessions refusal text,
+  pre-auth per-IP and rate rejection, idle/session timeouts, non-PTY refusal,
+  banner, and metrics events. Client machinery lives in `tests/_client.py`, with
+  a `serve` factory fixture in `conftest.py`.
 
   > **Trap worth knowing.** The client side must run a real VT emulator
   > (`pyte`), not `strip_ansi()` over the accumulated bytes. Wijjit uses a
@@ -374,12 +527,23 @@ cancel remaining tasks, close the listener.
   > screen plainly reads `N 1`. Feeding the stream through `pyte` reconstructs
   > what the user actually sees, and has the bonus of validating that our escape
   > sequences are well-formed, since a real emulator has to accept them.
-- **`test_auth.py`** — each preset in isolation with fake asyncssh callbacks.
-- **`test_limits.py`** — max_sessions rejection, per-IP cap, idle timeout fires.
+- **`test_auth.py`** — **[done: 30]** each preset in isolation with fake asyncssh
+  callbacks, plus accept *and* reject over real SSH.
+- **`test_limits.py`** — **[done: 33]** buckets, timers, registry, and drain,
+  against an injected clock with no sockets. These carry the real assertions
+  about limit behavior; the over-SSH tests above only prove the wiring. Same
+  split as the decoder, and the reason the timing assertions here are exact
+  rather than sleep-and-hope.
+- **`test_keys.py`** (22), **`test_config.py`** (31), **`test_logging.py`** (18),
+  **`test_shutdown.py`** (13) — **[done]**. Four tests are POSIX-only (0600 mode
+  bits, permission warnings, the end-to-end SIGTERM drain) and skip on Windows;
+  they first run under CI (M4), which is the main reason CI matters.
 - **Concurrency smoke** — open K simultaneous clients with different sizes;
   assert each renders at its own size (proves task-local size isolation).
 - Wire CI mirroring the wijjit repo (ruff/black/mypy-strict + pytest); asyncssh
-  is a hard dep of this package so tests always have it.
+  is a hard dep of this package so tests always have it. `pyte` is now declared
+  in the dev group — it was imported by the round-trip tests and undeclared,
+  which would have broken CI the day it was switched on.
 
 ---
 
@@ -411,15 +575,22 @@ cancel remaining tasks, close the listener.
   fail-closed construction (`allow_anonymous=True` required to run open);
   constant-time `check_password`; auth attempts logged (never the credential).
   30 tests in `test_auth.py`, including accept **and reject** over real SSH.
-- **M3 — Robust lifecycle.** `keys.py`, `limits.py`, graceful shutdown,
-  per-session logging, idle/keepalive.
-- **M4 — Config & polish.** `ServerConfig`, second example, README deployment
-  section, CI, promote round-trip tests.
-- **M5 — Hardening pass.** Backpressure handling, bracketed-paste + mouse edge
-  cases, fuzz the decoder, load test (hundreds of concurrent sessions).
+- **M3 — Robust lifecycle. [DONE]** `keys.py` (§7), `limits.py` (§8),
+  `logging.py` (§9), `config.py` (§10, pulled forward from M4 — M3 introduced the
+  twelve knobs it exists to hold, and threading them as kwargs first would have
+  broken the public signature twice). Graceful shutdown with a real drain,
+  per-session logging + metrics hook, idle/absolute timeouts, keepalive, non-PTY
+  refusal (§6). Also rebuilt the session teardown, which had been ending every
+  session by cancellation (§8). Landed as seven commits, suite green at each.
+- **M4 — Packaging & polish.** Second example (`dashboard_ssh.py`), README
+  deployment section (§12), CI mirroring the wijjit repo. Note four tests are
+  POSIX-only and have never run outside CI, so CI is worth more here than usual.
+- **M5 — Hardening pass.** Backpressure handling + the §9 byte counters (shared
+  `_ChannelWriter` seam), bracketed-paste + mouse edge cases, fuzz the decoder,
+  load test (hundreds of concurrent sessions).
 
-Each milestone is independently shippable; M1 alone makes the current prototype
-production-shaped on the hot path.
+Each milestone is independently shippable; M1 alone made the prototype
+production-shaped on the hot path, and M3 makes it deployable.
 
 ---
 
@@ -428,7 +599,8 @@ production-shaped on the hot path.
 - **ESC timeout value** — 30–50 ms is typical; confirm against real latency
   over WAN SSH. Could be adaptive.
 - **Wide chars / emoji** — Wijjit's screen buffer treats wide chars as
-  single-width (documented limitation). SSH doesn't change that; note it.
+  single-width (documented limitation). SSH doesn't change that; noted in the
+  README.
 - **Windows clients** — PuTTY/Windows Terminal key encodings differ (esp. Alt,
   function keys); the decoder table must be tested against them.
 - **Per-session executor** — should the server hand each app a `ThreadPoolExecutor`
@@ -436,4 +608,21 @@ production-shaped on the hot path.
   a shared, bounded executor with a config knob.
 - **Reconnect / session resume** — out of scope, but worth a design note if
   mobile clients (flaky links) become a target.
-```
+
+Raised by M3:
+
+- **Default limits are guesses.** 100 sessions / 10 per IP / 600s idle are
+  plausible but unmeasured. A session is a live Wijjit app, so `max_sessions` is
+  really a memory bound and the honest default depends on the app. Worth
+  measuring in M5's load test and documenting a sizing rule rather than a number.
+- **`session.ended` fires after `connection.closed`** when the peer vanishes,
+  because `connection_lost` is synchronous while the session teardown is a task.
+  Harmless for counters, mildly surprising for anyone reconstructing a timeline.
+- **Per-IP limits and NAT.** `max_per_ip=10` counts a shared corporate egress IP
+  as one peer. Fine for abuse resistance, wrong for a team behind one NAT. If
+  that bites, the answer is probably a per-*user* cap post-auth, alongside rather
+  than instead of the per-IP one.
+- **`ensure_host_key` on a non-persistent volume** silently mints a new identity
+  every restart; all we can do is log at WARNING (§7). A startup check that
+  refuses to generate unless `WIJJIT_SSH_ALLOW_HOST_KEY_GEN=1` might be worth it
+  for containers, but it trades DX for a footgun that logging already covers.

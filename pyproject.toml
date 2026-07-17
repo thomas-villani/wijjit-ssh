@@ -24,6 +24,10 @@ Wijjit = "https://github.com/tomvillani/wijjit"
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    # A real VT emulator. The round-trip tests need one because Wijjit's diff
+    # renderer sends a transcript, not a picture: only an emulator reconstructs
+    # the screen a user would actually see. See tests/_client.py.
+    "pyte>=0.8",
     "black>=24.0",
     "ruff>=0.4",
     "mypy>=1.10",
