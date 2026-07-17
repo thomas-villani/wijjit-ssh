@@ -53,11 +53,11 @@ except ImportError as exc:  # pragma: no cover - asyncssh is an optional dep
     ) from exc
 
 from wijjit import Wijjit
-from wijjit.logging_config import get_logger
 from wijjit.terminal.size import set_terminal_size
 
 from wijjit_ssh.auth import AuthPolicy, OpenAuth
 from wijjit_ssh.backend import RemoteTerminalBackend
+from wijjit_ssh.logging import get_logger
 
 logger = get_logger(__name__)
 

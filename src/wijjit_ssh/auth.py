@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Union
 
 import asyncssh
 
-from wijjit.logging_config import get_logger
+from wijjit_ssh.logging import get_logger
 
 if TYPE_CHECKING:
     from asyncssh import SSHKey

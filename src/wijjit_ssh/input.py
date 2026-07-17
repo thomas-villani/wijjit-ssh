@@ -36,7 +36,6 @@ import asyncio
 import codecs
 from typing import TYPE_CHECKING, Union
 
-from wijjit.logging_config import get_logger
 from wijjit.terminal.input import (
     MAX_PASTE_SIZE,
     SINGLE_CHAR_KEYS,
@@ -45,6 +44,8 @@ from wijjit.terminal.input import (
     KeyType,
 )
 from wijjit.terminal.mouse import MouseEvent, MouseEventParser, MouseTrackingMode
+
+from wijjit_ssh.logging import get_logger
 
 if TYPE_CHECKING:
     from typing import TextIO
