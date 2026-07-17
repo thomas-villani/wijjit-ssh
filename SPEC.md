@@ -582,9 +582,14 @@ listener. Idempotent under a lock; safe on a server that never started.
   per-session logging + metrics hook, idle/absolute timeouts, keepalive, non-PTY
   refusal (§6). Also rebuilt the session teardown, which had been ending every
   session by cancellation (§8). Landed as seven commits, suite green at each.
-- **M4 — Packaging & polish.** Second example (`dashboard_ssh.py`), README
-  deployment section (§12), CI mirroring the wijjit repo. Note four tests are
-  POSIX-only and have never run outside CI, so CI is worth more here than usual.
+- **M4 — Packaging, docs & polish.** Second example (`dashboard_ssh.py`), CI
+  mirroring the wijjit repo, and a **Sphinx docs site** — same stack as wijjit
+  (`sphinx-rtd-theme` / `copybutton` / `tabs`, `docs/Makefile`, the Pages
+  workflow), for consistency across the two projects rather than because this
+  repo needs it. The §12 deployment material is written as part of M4 alongside
+  the work it describes, not ahead of it: the nav anticipates those pages, but a
+  deployment story is documented once it exists. Note four tests are POSIX-only
+  and have never run outside CI, so CI is worth more here than usual.
 - **M5 — Hardening pass.** Backpressure handling + the §9 byte counters (shared
   `_ChannelWriter` seam), bracketed-paste + mouse edge cases, fuzz the decoder,
   load test (hundreds of concurrent sessions).
