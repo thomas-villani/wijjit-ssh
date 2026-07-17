@@ -57,6 +57,7 @@ from wijjit.terminal.size import set_terminal_size
 
 from wijjit_ssh.auth import AuthPolicy, OpenAuth
 from wijjit_ssh.backend import RemoteTerminalBackend
+from wijjit_ssh.keys import HostKeySource, resolve_host_keys
 from wijjit_ssh.logging import get_logger
 
 logger = get_logger(__name__)
@@ -355,9 +356,12 @@ class WijjitSSH:
     ----------
     app_factory : Callable[[SSHSession], Wijjit]
         Builds the app for each connection (the SSH analogue of a Flask view).
-    host_keys : list
-        SSH host keys: paths to key files, or :class:`asyncssh.SSHKey` objects.
-        Generate one with ``ssh-keygen -t ed25519 -f ssh_host_key -N ''``.
+    host_keys : sequence of str, PathLike, or asyncssh.SSHKey
+        The server's identity. Paths are loaded (and their fingerprints logged)
+        when the server is constructed, so a bad path fails here rather than at
+        listen time. Use :func:`~wijjit_ssh.keys.ensure_host_key` to generate one
+        on first run, or :func:`~wijjit_ssh.keys.load_host_keys` for a key you
+        manage out of band. Passing several supports rotation.
     auth : AuthPolicy, optional
         How to authenticate clients. See :mod:`wijjit_ssh.auth` -
         :class:`~wijjit_ssh.auth.AuthorizedKeys` is the usual choice.
@@ -387,10 +391,12 @@ class WijjitSSH:
         self,
         app_factory: AppFactory,
         *,
-        host_keys: Sequence[object],
+        host_keys: Sequence[HostKeySource],
         auth: Optional[AuthPolicy] = None,
         allow_anonymous: bool = False,
     ) -> None:
+        # Order matters: the auth check comes first so that omitting a policy
+        # reports the auth error, not a host-key error, whatever else is wrong.
         if auth is None:
             if not allow_anonymous:
                 raise ValueError(
@@ -409,7 +415,11 @@ class WijjitSSH:
             )
 
         self._app_factory = app_factory
-        self._host_keys = list(host_keys)
+        # Resolve eagerly: a bad key path should fail here, where the server is
+        # configured and the traceback points at the caller, rather than later
+        # inside create_server. An empty list is allowed through so that
+        # construction stays cheap to test; start() is where it has to be real.
+        self._host_keys = resolve_host_keys(host_keys)
         self._auth = auth
 
     async def start(self, host: str = "", port: int = 8022) -> "asyncssh.SSHAcceptor":
@@ -430,7 +440,21 @@ class WijjitSSH:
         -------
         asyncssh.SSHAcceptor
             The listening server; call ``close()`` on it to stop accepting.
+
+        Raises
+        ------
+        ValueError
+            If no host keys were configured. asyncssh would refuse every
+            connection with an opaque handshake failure, so say it plainly here.
         """
+        if not self._host_keys:
+            raise ValueError(
+                "WijjitSSH has no host keys, so no client could verify this "
+                "server. Pass host_keys=[...] - e.g. "
+                "host_keys=[ensure_host_key('ssh_host_key')] to generate and "
+                "reuse one, or host_keys=load_host_keys(['ssh_host_key']) to "
+                "load a key you manage yourself (see wijjit_ssh.keys)."
+            )
         return await asyncssh.create_server(
             lambda: _WijjitSSHServer(self._app_factory, self._auth),
             host,

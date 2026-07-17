@@ -2,7 +2,6 @@
 
 Run it::
 
-    ssh-keygen -t ed25519 -f ssh_host_key -N ''   # once, to make a host key
     uv run python examples/hello_ssh.py           # starts the server on :8022
 
 Then from another terminal::
@@ -11,6 +10,11 @@ Then from another terminal::
 
 You land straight in a live Wijjit TUI - a text field and a counter - served
 over SSH. Every connection gets its own independent app instance and state.
+
+Host key: :func:`~wijjit_ssh.keys.ensure_host_key` generates ``ssh_host_key`` on
+first run and reuses it afterwards, so no ``ssh-keygen`` step is needed and your
+client's ``known_hosts`` entry stays valid across restarts. In production you
+would generate the key out of band and load it with ``load_host_keys`` instead.
 
 Authentication: if you have a ``~/.ssh/authorized_keys``, this serves public-key
 auth against it (the recommended setup). If you do not, it falls back to *no
@@ -25,7 +29,7 @@ from pathlib import Path
 
 from wijjit import Wijjit, render_template_string
 
-from wijjit_ssh import AuthorizedKeys, SSHSession, WijjitSSH
+from wijjit_ssh import AuthorizedKeys, SSHSession, WijjitSSH, ensure_host_key
 
 TEMPLATE = """
 {% frame title="Wijjit over SSH" %}
@@ -66,13 +70,16 @@ def make_app(session: SSHSession) -> Wijjit:
 
 def build_server() -> WijjitSSH:
     """Prefer public-key auth; fall back to open auth so the demo always runs."""
+    # Generated on first run, reused after. Production would manage this out of
+    # band and use load_host_keys().
+    host_key = ensure_host_key("ssh_host_key")
     authorized_keys = Path.home() / ".ssh" / "authorized_keys"
 
     if authorized_keys.is_file():
         print(f"Public-key auth against {authorized_keys}")
         return WijjitSSH(
             make_app,
-            host_keys=["ssh_host_key"],
+            host_keys=[host_key],
             auth=AuthorizedKeys(authorized_keys),
         )
 
@@ -81,7 +88,7 @@ def build_server() -> WijjitSSH:
         "         Anyone who can reach this port can connect as any username.\n"
         "         Fine on localhost; never do this on a real network."
     )
-    return WijjitSSH(make_app, host_keys=["ssh_host_key"], allow_anonymous=True)
+    return WijjitSSH(make_app, host_keys=[host_key], allow_anonymous=True)
 
 
 if __name__ == "__main__":
