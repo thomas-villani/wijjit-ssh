@@ -47,6 +47,7 @@ Not yet hardened
 from __future__ import annotations
 
 import asyncio
+import signal
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -67,7 +68,7 @@ from wijjit.terminal.size import set_terminal_size
 from wijjit_ssh.auth import AuthPolicy, OpenAuth
 from wijjit_ssh.backend import RemoteTerminalBackend
 from wijjit_ssh.config import ServerConfig
-from wijjit_ssh.keys import resolve_host_keys
+from wijjit_ssh.keys import fingerprint, resolve_host_keys
 from wijjit_ssh.limits import IdleTimer, Rejection, SessionRegistry
 from wijjit_ssh.logging import (
     EventEmitter,
@@ -557,15 +558,29 @@ class _WijjitSSHServer(asyncssh.SSHServer):
         config: ServerConfig,
         registry: SessionRegistry,
         emitter: EventEmitter,
+        live: set["_WijjitSSHServer"] | None = None,
     ) -> None:
         self._app_factory = app_factory
         self._auth = auth
         self._config = config
         self._registry = registry
         self._emitter = emitter
+        # The owning server's set of live connections, so shutdown can find us.
+        # A session's teardown closes its channel, which leaves the SSH
+        # connection underneath it open; only the connection's owner can close
+        # that, and stop() has to, or it would be waiting on a client to
+        # volunteer.
+        self._live = live
         self._conn: asyncssh.SSHServerConnection | None = None
         self._peer_ip: str = "unknown"
         self._counted = False
+
+    def disconnect(self, message: str) -> None:
+        """Drop this connection, telling the client why. Idempotent."""
+        if self._conn is None:
+            return
+        with suppress(Exception):
+            self._conn.disconnect(asyncssh.DISC_BY_APPLICATION, message)
 
     def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
         self._conn = conn
@@ -597,6 +612,8 @@ class _WijjitSSHServer(asyncssh.SSHServer):
 
         self._registry.connection_opened(self._peer_ip)
         self._counted = True
+        if self._live is not None:
+            self._live.add(self)
         logger.info("Connection from %s", self._peer())
         self._emitter.emit("connection.opened", peer_ip=self._peer_ip)
 
@@ -611,6 +628,8 @@ class _WijjitSSHServer(asyncssh.SSHServer):
                 self._conn.abort()
 
     def connection_lost(self, exc: Optional[Exception]) -> None:
+        if self._live is not None:
+            self._live.discard(self)
         # Only release what we counted: a refused connection never took a slot,
         # and releasing one it never held would loosen the limit for that peer.
         if self._counted:
@@ -848,6 +867,15 @@ class WijjitSSH:
             connect_burst=self.config.connect_burst,
         )
 
+        self._acceptor: asyncssh.SSHAcceptor | None = None
+        self._live: set[_WijjitSSHServer] = set()
+        # Created in start(), not here: an Event binds no loop at construction on
+        # 3.11, but a WijjitSSH reused across two asyncio.run() calls would carry
+        # waiters registered against the first, dead loop.
+        self._stopping: asyncio.Event | None = None
+        self._stop_lock: asyncio.Lock | None = None
+        self._stopped = False
+
     @property
     def active_sessions(self) -> int:
         """How many sessions are live right now."""
@@ -892,13 +920,19 @@ class WijjitSSH:
                 "reuse one, or host_keys=load_host_keys(['ssh_host_key']) to "
                 "load a key you manage yourself (see wijjit_ssh.keys)."
             )
-        return await asyncssh.create_server(
+
+        self._stopping = asyncio.Event()
+        self._stop_lock = asyncio.Lock()
+        self._stopped = False
+
+        acceptor = await asyncssh.create_server(
             lambda: _WijjitSSHServer(
                 self._app_factory,
                 self._auth,
                 config=self.config,
                 registry=self._registry,
                 emitter=self._emitter,
+                live=self._live,
             ),
             self.config.host if host is None else host,
             self.config.port if port is None else port,
@@ -923,11 +957,91 @@ class WijjitSSH:
             keepalive_count_max=self.config.keepalive_count_max,
         )
 
+        self._acceptor = acceptor
+        for key in self._host_keys:
+            logger.info("Serving host key %s", fingerprint(key))
+        logger.info(
+            "Listening on %s:%d (max %d sessions, %d per IP)",
+            acceptor.get_addresses()[0][0] if acceptor.get_addresses() else "?",
+            acceptor.get_port(),
+            self.config.max_sessions,
+            self.config.max_per_ip,
+        )
+        return acceptor
+
+    async def stop(self, *, grace: float | None = None) -> None:
+        """Stop accepting, drain live sessions, and close the listener.
+
+        Idempotent and safe to call concurrently: a second caller awaits the
+        first rather than racing it. Safe to call on a server that never
+        started.
+
+        The order is deliberate. Accepting stops first, so the drain is not
+        chasing a moving target. Then sessions are *asked* to end and given
+        ``grace`` to do it, because a session that ends cleanly runs the app's
+        teardown and restores the client's terminal, while one that is cancelled
+        leaves a real person in the alternate screen buffer. Only then does the
+        listener close.
+
+        Parameters
+        ----------
+        grace : float, optional
+            Seconds to allow for a clean exit, overriding
+            ``config.shutdown_grace``.
+
+        Returns
+        -------
+        None
+
+        Examples
+        --------
+        >>> server = WijjitSSH(make_app, host_keys=[key], auth=policy)  # doctest: +SKIP
+        >>> await server.start()                                        # doctest: +SKIP
+        >>> await server.stop()                                         # doctest: +SKIP
+        """
+        if self._acceptor is None:
+            return  # never started, or already fully stopped
+
+        assert self._stop_lock is not None  # set by start(), with the acceptor
+        async with self._stop_lock:
+            if self._stopped:
+                return
+            self._stopped = True
+
+            acceptor = self._acceptor
+            logger.info("Shutting down: no longer accepting connections")
+            acceptor.close()
+
+            if self._stopping is not None:
+                self._stopping.set()  # release run_async
+
+            forced = await self._registry.drain(
+                reason="server_shutdown",
+                message="This server is shutting down. Please reconnect shortly.",
+                grace=self.config.shutdown_grace if grace is None else grace,
+            )
+
+            # Draining ends sessions, which closes their channels - but the SSH
+            # connection underneath each one survives that, and only its owner
+            # can close it. Do so now: a shutdown that left clients connected to
+            # a server with no sessions would be a lie, and (since Python 3.12
+            # made Server.wait_closed() wait for every connection) the wait below
+            # would hang until each client happened to give up.
+            for connection in list(self._live):
+                connection.disconnect("Server is shutting down.")
+            self._live.clear()
+
+            await acceptor.wait_closed()
+            self._acceptor = None
+            logger.info("Shutdown complete (%d session(s) had to be forced)", forced)
+
     async def run_async(self, host: str | None = None, port: int | None = None) -> None:
-        """Start the SSH server and serve until cancelled.
+        """Start the SSH server and serve until :meth:`stop` is called.
 
         Like :meth:`start`, this configures no logging and installs no signal
-        handlers - it may be embedded in a host application that owns both.
+        handlers - it may be embedded in a host application that owns both. A
+        host that wants signal handling should install its own and call
+        :meth:`stop`, or use :meth:`run`.
 
         Parameters
         ----------
@@ -937,16 +1051,23 @@ class WijjitSSH:
             Bind port, overriding ``config.port``.
         """
         await self.start(host, port)
-        # Serve forever.
-        await asyncio.Event().wait()
+        assert self._stopping is not None  # start() creates it
+        await self._stopping.wait()
 
     def run(self, host: str | None = None, port: int | None = None) -> None:
-        """Serve until interrupted. Blocking; owns the process.
+        """Serve until interrupted, draining cleanly. Blocking; owns the process.
 
         The entry point for "this process is the server", as opposed to
-        :meth:`run_async`, which may be embedded in a larger application. That
-        ownership is why this is the only method that will configure logging -
-        and, from a later step, install signal handlers.
+        :meth:`run_async`, which may be one coroutine inside a larger
+        application. That ownership is the whole distinction: this is the only
+        method that configures logging or installs signal handlers, because a
+        library coroutine has no business doing either to somebody else's
+        process. (It is the same reasoning that makes the backend set
+        ``owns_terminal = False``.)
+
+        On SIGINT/SIGTERM the server stops accepting, gives live sessions
+        ``config.shutdown_grace`` to exit cleanly - which is what restores each
+        client's terminal - and then exits.
 
         Parameters
         ----------
@@ -954,12 +1075,92 @@ class WijjitSSH:
             Bind address, overriding ``config.host``.
         port : int, optional
             Bind port, overriding ``config.port``.
+
+        Notes
+        -----
+        Signal handling on Windows is best-effort: SIGTERM is never delivered
+        there (``TerminateProcess`` does not run handlers), so only Ctrl+C
+        drains. The deployment targets in the README are systemd and Docker,
+        both POSIX.
         """
         # Only here, and only if nobody else has: a host that configured its own
         # logging keeps full control. See wijjit_ssh.logging.
         if not logging_is_configured():
             configure_logging(sys.stderr)
         try:
-            asyncio.run(self.run_async(host, port))
+            asyncio.run(self._run_owning_process(host, port))
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
+
+    async def _run_owning_process(self, host: str | None, port: int | None) -> None:
+        """:meth:`run_async`, plus the signal handlers only :meth:`run` may install."""
+        loop = asyncio.get_running_loop()
+        undo: list[Callable[[], None]] = []
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            if not self._install_signal_handler(loop, sig, undo):
+                logger.debug("No handler installed for %s", sig.name)
+
+        try:
+            await self.run_async(host, port)
+        finally:
+            for restore in undo:
+                with suppress(Exception):
+                    restore()
+            # A signal only asks stop() to start; without this, run() could
+            # return while sessions are still draining.
+            await self.stop()
+
+    def _install_signal_handler(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        sig: signal.Signals,
+        undo: list[Callable[[], None]],
+    ) -> bool:
+        """Install one signal handler, by whichever mechanism this platform has.
+
+        Returns
+        -------
+        bool
+            True if a handler was installed.
+        """
+        try:
+            loop.add_signal_handler(sig, self._signal_stop, sig)
+        except (NotImplementedError, AttributeError, ValueError, RuntimeError):
+            # Windows' ProactorEventLoop has no add_signal_handler. Fall back to
+            # the C-level handler and bounce onto the loop thread, which works
+            # because call_soon_threadsafe writes to the loop's self-pipe and so
+            # wakes the proactor.
+            try:
+                previous = signal.signal(
+                    sig,
+                    lambda s, frame: loop.call_soon_threadsafe(self._signal_stop, s),
+                )
+            except (ValueError, OSError, AttributeError):
+                # signal.signal only works on the main thread, and not every
+                # signal exists everywhere. Not fatal: run() still has its
+                # KeyboardInterrupt net.
+                return False
+
+            def restore_c_handler() -> None:
+                signal.signal(sig, previous)
+
+            undo.append(restore_c_handler)
+        else:
+
+            def restore_loop_handler() -> None:
+                loop.remove_signal_handler(sig)
+
+            undo.append(restore_loop_handler)
+        return True
+
+    def _signal_stop(self, sig: int) -> None:
+        """Begin a graceful shutdown in response to a signal."""
+        name = signal.Signals(sig).name if isinstance(sig, int) else str(sig)
+        if self._stopped:
+            # A second signal from an impatient operator. stop() is idempotent
+            # and already draining; say so rather than appearing to ignore them.
+            logger.warning("%s received again; already shutting down", name)
+            return
+        logger.info("%s received; shutting down gracefully", name)
+        asyncio.ensure_future(self.stop())
