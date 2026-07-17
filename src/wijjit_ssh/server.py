@@ -41,9 +41,10 @@ Not yet hardened
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 try:
     import asyncssh
@@ -57,8 +58,9 @@ from wijjit.terminal.size import set_terminal_size
 
 from wijjit_ssh.auth import AuthPolicy, OpenAuth
 from wijjit_ssh.backend import RemoteTerminalBackend
-from wijjit_ssh.keys import HostKeySource, resolve_host_keys
-from wijjit_ssh.logging import get_logger
+from wijjit_ssh.config import ServerConfig
+from wijjit_ssh.keys import resolve_host_keys
+from wijjit_ssh.logging import configure_logging, get_logger, logging_is_configured
 
 logger = get_logger(__name__)
 
@@ -356,18 +358,23 @@ class WijjitSSH:
     ----------
     app_factory : Callable[[SSHSession], Wijjit]
         Builds the app for each connection (the SSH analogue of a Flask view).
-    host_keys : sequence of str, PathLike, or asyncssh.SSHKey
-        The server's identity. Paths are loaded (and their fingerprints logged)
-        when the server is constructed, so a bad path fails here rather than at
-        listen time. Use :func:`~wijjit_ssh.keys.ensure_host_key` to generate one
-        on first run, or :func:`~wijjit_ssh.keys.load_host_keys` for a key you
-        manage out of band. Passing several supports rotation.
-    auth : AuthPolicy, optional
-        How to authenticate clients. See :mod:`wijjit_ssh.auth` -
-        :class:`~wijjit_ssh.auth.AuthorizedKeys` is the usual choice.
-    allow_anonymous : bool, optional
-        Permit running with **no authentication** (default False). Required to
-        omit ``auth``; see Raises.
+    config : ServerConfig, optional
+        Every knob the server takes; see :class:`~wijjit_ssh.config.ServerConfig`.
+        Defaults are used when omitted.
+    **overrides
+        Any :class:`~wijjit_ssh.config.ServerConfig` field, as a keyword. Applied
+        on top of ``config``, so the common case needs no config object at all::
+
+            WijjitSSH(make_app, host_keys=[key], auth=policy, max_sessions=10)
+
+        Unknown names raise :exc:`TypeError` rather than being ignored - a
+        typo'd ``max_session=1`` that silently does nothing would leave a server
+        the operator believes is bounded and which is not.
+
+    Attributes
+    ----------
+    config : ServerConfig
+        The resolved configuration, after overrides and validation.
 
     Raises
     ------
@@ -376,29 +383,39 @@ class WijjitSSH:
         Serving an unauthenticated SSH server is a decision that has to be typed
         out, not one you inherit by forgetting an argument - so the default
         fails closed rather than silently accepting every client on the internet.
+        Also raised for an out-of-range config value, or an unreadable host key.
+    TypeError
+        If an override is not a config field.
 
     Examples
     --------
-    >>> from wijjit_ssh.auth import AuthorizedKeys
+    >>> from wijjit_ssh import AuthorizedKeys, ensure_host_key, WijjitSSH
     >>> WijjitSSH(                                          # doctest: +SKIP
     ...     make_app,
-    ...     host_keys=["ssh_host_key"],
+    ...     host_keys=[ensure_host_key("ssh_host_key")],
     ...     auth=AuthorizedKeys("~/.ssh/authorized_keys"),
-    ... ).run(port=8022)
+    ... ).run()
+
+    Or build the config up front, e.g. from a file or argparse:
+
+    >>> config = ServerConfig(port=2222, max_sessions=10)   # doctest: +SKIP
+    >>> WijjitSSH(make_app, config, host_keys=[key], auth=policy).run()
     """
 
     def __init__(
         self,
         app_factory: AppFactory,
-        *,
-        host_keys: Sequence[HostKeySource],
-        auth: Optional[AuthPolicy] = None,
-        allow_anonymous: bool = False,
+        config: Optional[ServerConfig] = None,
+        **overrides: Any,
     ) -> None:
+        base = config if config is not None else ServerConfig()
+        self.config = base.replace(**overrides) if overrides else base
+
+        auth = self.config.auth
         # Order matters: the auth check comes first so that omitting a policy
         # reports the auth error, not a host-key error, whatever else is wrong.
         if auth is None:
-            if not allow_anonymous:
+            if not self.config.allow_anonymous:
                 raise ValueError(
                     "WijjitSSH requires an auth policy. Pass auth=... (see "
                     "wijjit_ssh.auth: AuthorizedKeys, PasswordAuth, ChainAuth), "
@@ -419,22 +436,28 @@ class WijjitSSH:
         # configured and the traceback points at the caller, rather than later
         # inside create_server. An empty list is allowed through so that
         # construction stays cheap to test; start() is where it has to be real.
-        self._host_keys = resolve_host_keys(host_keys)
+        self._host_keys = resolve_host_keys(self.config.host_keys)
         self._auth = auth
 
-    async def start(self, host: str = "", port: int = 8022) -> "asyncssh.SSHAcceptor":
+    async def start(
+        self, host: str | None = None, port: int | None = None
+    ) -> "asyncssh.SSHAcceptor":
         """Bind the listener and start accepting connections.
 
         Returns as soon as the server is listening, so callers can drive it
         (tests bind port 0 and read the assigned port off the acceptor). Use
         :meth:`run_async` to start and then serve forever.
 
+        Does not configure logging or install signal handlers: this entry point
+        may be one coroutine inside a larger application, which owns both. Use
+        :meth:`run` when the server owns the process.
+
         Parameters
         ----------
         host : str, optional
-            Bind address (default: all interfaces).
+            Bind address, overriding ``config.host``.
         port : int, optional
-            Bind port (default: 8022). Pass 0 to let the OS choose.
+            Bind port, overriding ``config.port``. Pass 0 to let the OS choose.
 
         Returns
         -------
@@ -457,8 +480,8 @@ class WijjitSSH:
             )
         return await asyncssh.create_server(
             lambda: _WijjitSSHServer(self._app_factory, self._auth),
-            host,
-            port,
+            self.config.host if host is None else host,
+            self.config.port if port is None else port,
             server_host_keys=self._host_keys,
             # A TUI needs raw, char-at-a-time input and does its own drawing.
             # asyncssh's default PTY line editor would echo keystrokes and
@@ -470,24 +493,52 @@ class WijjitSSH:
             # asyncssh would decode/encode as text on our behalf and we would
             # lose the exact byte stream the client sent.
             encoding=None,
+            # Bound what an unauthenticated peer can hold: asyncssh's own
+            # default is 120s.
+            login_timeout=self.config.login_timeout,
+            # Reap peers whose TCP connection died without a FIN (a closed
+            # laptop, a NAT timeout); they would otherwise hold a session slot
+            # until the OS gave up, which can be hours.
+            keepalive_interval=self.config.keepalive_interval,
+            keepalive_count_max=self.config.keepalive_count_max,
         )
 
-    async def run_async(self, host: str = "", port: int = 8022) -> None:
+    async def run_async(self, host: str | None = None, port: int | None = None) -> None:
         """Start the SSH server and serve until cancelled.
+
+        Like :meth:`start`, this configures no logging and installs no signal
+        handlers - it may be embedded in a host application that owns both.
 
         Parameters
         ----------
         host : str, optional
-            Bind address (default: all interfaces).
+            Bind address, overriding ``config.host``.
         port : int, optional
-            Bind port (default: 8022).
+            Bind port, overriding ``config.port``.
         """
         await self.start(host, port)
         # Serve forever.
         await asyncio.Event().wait()
 
-    def run(self, host: str = "", port: int = 8022) -> None:
-        """Blocking convenience wrapper around :meth:`run_async`."""
+    def run(self, host: str | None = None, port: int | None = None) -> None:
+        """Serve until interrupted. Blocking; owns the process.
+
+        The entry point for "this process is the server", as opposed to
+        :meth:`run_async`, which may be embedded in a larger application. That
+        ownership is why this is the only method that will configure logging -
+        and, from a later step, install signal handlers.
+
+        Parameters
+        ----------
+        host : str, optional
+            Bind address, overriding ``config.host``.
+        port : int, optional
+            Bind port, overriding ``config.port``.
+        """
+        # Only here, and only if nobody else has: a host that configured its own
+        # logging keeps full control. See wijjit_ssh.logging.
+        if not logging_is_configured():
+            configure_logging(sys.stderr)
         try:
             asyncio.run(self.run_async(host, port))
         except (KeyboardInterrupt, asyncio.CancelledError):

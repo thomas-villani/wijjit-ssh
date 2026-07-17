@@ -5,6 +5,9 @@ Public API
 WijjitSSH
     The server. Give it a per-connection app factory and host keys, call
     ``run()``.
+ServerConfig
+    Every knob the server takes - limits, timeouts, banner, metrics hook. Pass
+    one, or pass its fields as keywords to ``WijjitSSH``.
 SSHSession
     Context handed to the factory (username, term type, size, backend).
 RemoteTerminalBackend
@@ -38,6 +41,7 @@ from wijjit_ssh.auth import (
     load_authorized_keys,
 )
 from wijjit_ssh.backend import RemoteTerminalBackend
+from wijjit_ssh.config import ServerConfig
 from wijjit_ssh.input import ChannelInputSource, KeyDecoder
 from wijjit_ssh.keys import ensure_host_key, fingerprint, load_host_keys
 from wijjit_ssh.logging import configure_logging
@@ -45,6 +49,7 @@ from wijjit_ssh.server import SSHSession, WijjitSSH
 
 __all__ = [
     "WijjitSSH",
+    "ServerConfig",
     "SSHSession",
     "RemoteTerminalBackend",
     "AuthPolicy",
