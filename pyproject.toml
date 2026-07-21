@@ -4,20 +4,44 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wijjit-ssh"
-version = "0.0.1"
+# Single-sourced from src/wijjit_ssh/__init__.py; see [tool.hatch.version].
+dynamic = ["version"]
 description = "Serve Wijjit TUI apps over SSH - Flask for SSH apps."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 authors = [{ name = "Tom Villani", email = "thomas.villani@gmail.com" }]
-keywords = ["ssh", "tui", "terminal", "wijjit", "asyncssh"]
+keywords = ["ssh", "tui", "terminal", "wijjit", "asyncssh", "server"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: User Interfaces",
+    "Topic :: System :: Networking",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Terminals",
+    "Typing :: Typed",
+]
 dependencies = [
     "wijjit>=0.1.0",
     "asyncssh>=2.14",
-    "prompt-toolkit>=3.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/thomas-villani/wijjit-ssh"
+Documentation = "https://thomas-villani.github.io/wijjit-ssh/"
+Repository = "https://github.com/thomas-villani/wijjit-ssh"
+Issues = "https://github.com/thomas-villani/wijjit-ssh/issues"
+Changelog = "https://github.com/thomas-villani/wijjit-ssh/blob/main/CHANGELOG.md"
 Wijjit = "https://github.com/thomas-villani/wijjit"
 
 [tool.uv.sources]
@@ -39,6 +63,7 @@ wijjit = { path = "../wijjit", editable = true }
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-cov>=6.0",
     # A real VT emulator. The round-trip tests need one because Wijjit's diff
     # renderer sends a transcript, not a picture: only an emulator reconstructs
     # the screen a user would actually see. See tests/_client.py.
@@ -48,8 +73,25 @@ dev = [
     "mypy>=1.10",
 ]
 
+[tool.hatch.version]
+path = "src/wijjit_ssh/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/wijjit_ssh"]
+
+# Explicit sdist contents so the build is deterministic and never walks stray
+# local directories (this repo keeps a .venv/ in tree).
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/wijjit_ssh",
+    "tests",
+    "examples",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "spec.md",
+    "pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -57,9 +99,14 @@ asyncio_mode = "auto"
 
 [tool.black]
 line-length = 88
+# Pinned, not inferred: without it black guesses a target from the installed
+# interpreter and warns that it "cannot parse code formatted for Python 3.15",
+# which is a warning in every CI log that everyone then learns to ignore.
+target-version = ["py311"]
 
 [tool.ruff]
 line-length = 88
+target-version = "py311"
 
 [tool.mypy]
 python_version = "3.11"

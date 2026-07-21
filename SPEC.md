@@ -13,11 +13,14 @@ tests, and packaging.
 - **M3 — robust lifecycle (§7–§10).** Done. Host keys, resource limits,
   per-session logging + metrics hook, and graceful shutdown. `ServerConfig` was
   pulled forward from M4, since M3 introduced the twelve knobs it exists to hold.
+- **M4 — packaging, CI, docs.** In progress. Packaging metadata and CI are
+  landed; the docs site, the second example, and the §12 deployment artifacts
+  are not.
 
-333 tests. §4, §5 and §7–§10 below now describe the code rather than a plan. The
-remaining work is **M4 (packaging/CI/docs)** and **M5 (hardening)** — the big
-remaining gap is **backpressure (§8)**: a client that stops reading still buffers
-frames in asyncssh without bound.
+334 tests (338 on POSIX, where four Windows-skipped tests run). §4, §5 and §7–§10
+below now describe the code rather than a plan. The remaining work is the rest of
+**M4** and all of **M5 (hardening)** — the big remaining gap is **backpressure
+(§8)**: a client that stops reading still buffers frames in asyncssh without bound.
 
 It is deliberately concrete — interface signatures, file layout, and phased
 milestones — so it can be read top-to-bottom to understand the whole design,
@@ -97,9 +100,17 @@ This is what §4.2 below always assumed, now enforced by the type system.
 wijjit-ssh/
   pyproject.toml
   README.md
+  CHANGELOG.md                                                              [done]
+  LICENSE                     MIT, matching wijjit                          [done]
   SPEC.md                     (this file)
+  .github/workflows/
+    ci.yml                    test matrix / lint / coverage   (§13 M4)      [done]
+    docs.yml                  Sphinx build + Pages deploy     (TODO, M4)
+  docs/                       Sphinx site                     (TODO, M4)
+  deploy/                     systemd unit, Dockerfile, healthcheck (TODO, §12)
   src/wijjit_ssh/
     __init__.py               public API
+    py.typed                  PEP 561 marker                                [done]
     server.py                 WijjitSSH, session glue (asyncssh callbacks)  [done]
     backend.py                RemoteTerminalBackend  (bytes I/O + size)     [done]
     input.py                  ChannelInputSource + KeyDecoder  (§4)         [done]
@@ -535,15 +546,18 @@ listener. Idempotent under a lock; safe on a server that never started.
   split as the decoder, and the reason the timing assertions here are exact
   rather than sleep-and-hope.
 - **`test_keys.py`** (22), **`test_config.py`** (31), **`test_logging.py`** (18),
-  **`test_shutdown.py`** (13) — **[done]**. Four tests are POSIX-only (0600 mode
-  bits, permission warnings, the end-to-end SIGTERM drain) and skip on Windows;
-  they first run under CI (M4), which is the main reason CI matters.
+  **`test_shutdown.py`** (13) — **[done]**. Four tests are POSIX-only (three 0600
+  mode-bit assertions in `test_keys.py`, the end-to-end SIGTERM drain in
+  `test_shutdown.py`) and skip on Windows, the only machine this repo was
+  developed on. **They first ran under CI in M4** — which is the main reason CI
+  mattered here more than it usually does.
 - **Concurrency smoke** — open K simultaneous clients with different sizes;
   assert each renders at its own size (proves task-local size isolation).
-- Wire CI mirroring the wijjit repo (ruff/black/mypy-strict + pytest); asyncssh
-  is a hard dep of this package so tests always have it. `pyte` is now declared
-  in the dev group — it was imported by the round-trip tests and undeclared,
-  which would have broken CI the day it was switched on.
+- **CI — [done, M4].** `.github/workflows/ci.yml`: pytest across 3.11–3.13 ×
+  Linux/macOS/Windows, plus ruff/black/mypy-strict and coverage. asyncssh is a
+  hard dep of this package so tests always have it. `pyte` is declared in the dev
+  group — it was imported by the round-trip tests and undeclared, which would
+  have broken CI the day it was switched on.
 
 ---
 
@@ -582,14 +596,34 @@ listener. Idempotent under a lock; safe on a server that never started.
   per-session logging + metrics hook, idle/absolute timeouts, keepalive, non-PTY
   refusal (§6). Also rebuilt the session teardown, which had been ending every
   session by cancellation (§8). Landed as seven commits, suite green at each.
-- **M4 — Packaging, docs & polish.** Second example (`dashboard_ssh.py`), CI
-  mirroring the wijjit repo, and a **Sphinx docs site** — same stack as wijjit
-  (`sphinx-rtd-theme` / `copybutton` / `tabs`, `docs/Makefile`, the Pages
-  workflow), for consistency across the two projects rather than because this
-  repo needs it. The §12 deployment material is written as part of M4 alongside
-  the work it describes, not ahead of it: the nav anticipates those pages, but a
-  deployment story is documented once it exists. Note four tests are POSIX-only
-  and have never run outside CI, so CI is worth more here than usual.
+- **M4 — Packaging, docs & polish.** Landed in slices.
+  - **Packaging + CI. [DONE]** Metadata a package needs and did not have:
+    `LICENSE` (MIT), classifiers, `py.typed` (the tree is mypy-strict clean but
+    shipped no PEP 561 marker, so every downstream checker silently ignored its
+    annotations), a version single-sourced from `__init__.py` via
+    `[tool.hatch.version]`, an explicit sdist include list, and the removal of
+    `prompt-toolkit` from `dependencies` — dead since M1, which is exactly when
+    the pin should have gone. `.gitignore` had a real hole: the rules were
+    `*.key` and `host_key*`, but the examples write **`ssh_host_key`**, whose
+    basename matched neither, so running the documented demo from the repo root
+    left an untracked private host key that `git add .` would commit.
+    `.github/workflows/ci.yml` runs test (3.11–3.13 × Linux/macOS/Windows), lint
+    (ruff + black + mypy over `src/`, `tests/`, and `examples/`), and coverage.
+    It is uv-based rather than a copy of wijjit's pip-based workflow, because dev
+    deps here are PEP 735 `[dependency-groups]`, which `pip install -e ".[dev]"`
+    cannot see at all. Since wijjit is not on PyPI, each job checks out **both**
+    repos as siblings so the existing `../wijjit` path source resolves unchanged
+    — CI is then byte-for-byte the layout the README documents for local
+    development, and collapses to a single checkout the day wijjit publishes.
+    **This is the first time the four POSIX-only tests have ever run.**
+  - **Docs & examples. [TODO]** Second example (`dashboard_ssh.py`) and a
+    **Sphinx docs site** — same stack as wijjit (`sphinx-rtd-theme` /
+    `copybutton` / `tabs`, `docs/Makefile`, the Pages workflow), for consistency
+    across the two projects rather than because this repo needs it. The §12
+    deployment material is written alongside the work it describes, not ahead of
+    it: it ships as real artifacts (a systemd unit, a Dockerfile, a scripted
+    healthcheck) that the docs then describe, so the snippets are things that
+    have been run rather than things that were typed.
 - **M5 — Hardening pass.** Backpressure handling + the §9 byte counters (shared
   `_ChannelWriter` seam), bracketed-paste + mouse edge cases, fuzz the decoder,
   load test (hundreds of concurrent sessions).

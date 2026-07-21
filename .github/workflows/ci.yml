@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Why every job checks out two repositories
+# -----------------------------------------
+# `wijjit` is not on PyPI yet, so `pyproject.toml` resolves it through
+# `[tool.uv.sources] wijjit = { path = "../wijjit", editable = true }`. Checking
+# both repos out as siblings under $GITHUB_WORKSPACE reproduces exactly the layout
+# README.md documents for local development, so that path source resolves on a
+# runner with no CI-only dependency override and no change to pyproject.toml.
+#
+# Tracking wijjit `main` rather than a tag is deliberate: the two libraries are
+# developed in tandem, so a wijjit change that breaks the TerminalBackend /
+# InputSource seam should redden this repo's CI the day it lands. That is the same
+# reason the local source is a path and not a git ref.
+#
+# ONCE WIJJIT PUBLISHES: delete the second checkout step in each job, drop
+# `path: wijjit-ssh` from the first, and remove `working-directory: wijjit-ssh`
+# from every `run:`. That collapses this to an ordinary single-checkout workflow.
+# See the removal note on [tool.uv.sources] in pyproject.toml.
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: wijjit-ssh
+
+      - uses: actions/checkout@v7
+        with:
+          repository: thomas-villani/wijjit
+          path: wijjit
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Sync dependencies
+        # Plain `uv sync`, not `--locked`: the wijjit path source means uv.lock
+        # legitimately moves whenever the sibling checkout's own dependencies do,
+        # and `--locked` would fail CI over a change that isn't ours. Worth
+        # tightening once wijjit is an ordinary PyPI pin.
+        #
+        # uv fetches the interpreter itself, so there is no actions/setup-python step.
+        run: uv sync --python ${{ matrix.python-version }}
+        working-directory: wijjit-ssh
+
+      - name: Run tests
+        # Four tests are POSIX-only (the 0600 host-key mode bits, the permission
+        # warning, and the end-to-end SIGTERM drain) and skip on Windows. The
+        # ubuntu and macOS legs are the only place they run at all.
+        run: uv run pytest -q --tb=short
+        working-directory: wijjit-ssh
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: wijjit-ssh
+
+      - uses: actions/checkout@v7
+        with:
+          repository: thomas-villani/wijjit
+          path: wijjit
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Sync dependencies
+        run: uv sync --python 3.11
+        working-directory: wijjit-ssh
+
+      # tests/ and examples/ are linted alongside src/, unlike the wijjit repo's
+      # own workflow. They are already clean, so there is no reason to leave them
+      # unguarded.
+      - name: ruff
+        run: uv run ruff check src/ tests/ examples/
+        working-directory: wijjit-ssh
+
+      - name: black
+        run: uv run black --check src/ tests/ examples/
+        working-directory: wijjit-ssh
+
+      - name: mypy
+        run: uv run mypy src/
+        working-directory: wijjit-ssh
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: wijjit-ssh
+
+      - uses: actions/checkout@v7
+        with:
+          repository: thomas-villani/wijjit
+          path: wijjit
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Sync dependencies
+        run: uv sync --python 3.11
+        working-directory: wijjit-ssh
+
+      - name: Run tests with coverage
+        run: >
+          uv run pytest
+          --cov=src/wijjit_ssh
+          --cov-report=xml
+          --cov-report=term-missing
+          -q
+        working-directory: wijjit-ssh
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          files: ./wijjit-ssh/coverage.xml
+          fail_ci_if_error: false
