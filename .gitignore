@@ -19,9 +19,21 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
+# Coverage (the CI coverage job writes these; so does a local `pytest --cov`)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
 # SSH host keys (never commit private keys)
+#
+# `host_key*` alone is not enough: gitignore matches on the basename, and the
+# examples call ensure_host_key("ssh_host_key"), which writes a private key named
+# `ssh_host_key` into the working directory on first run. That starts with `ssh_`,
+# so it matched neither `*.key` nor `host_key*`. Keep the patterns anchored to the
+# suffix as well as the prefix.
 *.key
-host_key*
+*host_key*
 known_hosts
 
 # Editors / OS

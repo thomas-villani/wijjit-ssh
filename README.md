@@ -1,5 +1,9 @@
 # wijjit-ssh
 
+[![CI](https://github.com/thomas-villani/wijjit-ssh/actions/workflows/ci.yml/badge.svg)](https://github.com/thomas-villani/wijjit-ssh/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **Flask for SSH apps.** Serve [Wijjit](https://github.com/thomas-villani/wijjit) TUI
 applications over SSH: Wijjit draws the UI, `asyncssh` handles the transport and
 PTY, and every connection gets its own live app instance.
@@ -240,10 +244,18 @@ PycharmProjects/
 ```
 
 ```bash
-uv sync                  # installs wijjit editable from ../wijjit
-uv run pytest            # 334 tests
-uv run ruff check src/ && uv run mypy src/
+uv sync                            # installs wijjit editable from ../wijjit
+uv run pytest -q                   # 334 passed, 4 skipped
+uv run ruff check src/ tests/ examples/
+uv run black --check src/ tests/ examples/
+uv run mypy src/
+uv run pytest --cov=src/wijjit_ssh --cov-report=term-missing -q
 ```
+
+Those are exactly the commands CI runs, so a clean local run means a green build.
+The four skips are all POSIX-only - three `0600` host-key mode-bit assertions and
+the end-to-end SIGTERM drain - so on Linux and macOS the suite reports 338 passed.
+CI covers Python 3.11-3.13 on Linux, macOS, and Windows.
 
 The source is **editable and a path, not a git ref**, on purpose: the two
 libraries are developed in tandem, so changes to `../wijjit` are picked up here
