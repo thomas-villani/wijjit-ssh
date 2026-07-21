@@ -255,6 +255,7 @@ def test_run_drains_on_sigterm(host_key, tmp_path) -> None:
     """
     import subprocess
     import textwrap
+    import time
 
     key_path = tmp_path / "host_key"
     key_path.write_bytes(host_key.export_private_key())
@@ -276,7 +277,6 @@ def test_run_drains_on_sigterm(host_key, tmp_path) -> None:
             host_keys=load_host_keys([{str(key_path)!r}]),
             allow_anonymous=True,
         )
-        print("READY", flush=True)
         server.run(host="127.0.0.1", port=0)
         print("EXITED CLEANLY", flush=True)
         """)
@@ -285,10 +285,31 @@ def test_run_drains_on_sigterm(host_key, tmp_path) -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        bufsize=1,
     )
     try:
-        assert proc.stdout is not None
-        assert proc.stdout.readline().strip() == "READY"
+        assert proc.stderr is not None
+        # Wait until the server is actually listening before signalling it.
+        #
+        # This wait is load-bearing, not politeness. run() installs its signal
+        # handlers inside asyncio.run(), and start() binds and logs strictly
+        # after that, so this line is proof that a SIGTERM will now be *caught*.
+        # Keying readiness off a print() before run() instead - which is how this
+        # test was originally written - races handler installation, and losing
+        # that race means the default SIGTERM disposition kills the child
+        # outright: no "EXITED CLEANLY", and both pipes empty. That is exactly
+        # how this test failed the first time it ever ran (it is POSIX-only, and
+        # the repo was developed on Windows, so CI was its first execution).
+        #
+        # Coupled to the "Listening on" text in WijjitSSH.start(); if that log
+        # line is reworded, reword it here too.
+        deadline = time.monotonic() + 30.0
+        while "Listening on" not in (line := proc.stderr.readline()):
+            if not line:
+                raise AssertionError("server exited before it began listening")
+            if time.monotonic() > deadline:
+                raise AssertionError("server never reported that it was listening")
+
         proc.send_signal(signal.SIGTERM)
         stdout, stderr = proc.communicate(timeout=15)
     except Exception:
