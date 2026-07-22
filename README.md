@@ -200,6 +200,39 @@ For metrics, pass `on_event=` - called with `connection.opened|closed|rejected`,
 can wire up Prometheus without this package depending on a metrics library. A
 hook that raises is logged and swallowed; it can't take a session down.
 
+## Examples
+
+Three runnable programs in [`examples/`](examples/), in the order worth reading:
+
+| Example | What it is for |
+|---|---|
+| [`hello_ssh.py`](examples/hello_ssh.py) | The smallest thing that works: one factory, one view, a text field and a counter. |
+| [`dashboard_ssh.py`](examples/dashboard_ssh.py) | A live server dashboard - gauges, history, top processes, and a table of everyone connected to the server drawing it. One shared sampler feeding N windows. |
+| [`chat_ssh.py`](examples/chat_ssh.py) | A multi-user chat room with no user accounts, because SSH already authenticated everyone. N writers feeding N windows. |
+
+```bash
+uv run python examples/hello_ssh.py                          # :8022
+uv run python examples/chat_ssh.py                           # :8023
+uv sync --group examples                                     # dashboard needs psutil
+uv run --group examples python examples/dashboard_ssh.py     # :8022
+```
+
+The first is about the transport; the other two are about the thing the transport
+makes possible - **N live apps in one process, sharing state**. Both are built the
+same way: a hub at module scope that every view reads directly, and
+`app.refresh()` to tell the other sessions' apps to redraw, since each is parked
+in its own task waiting for a keypress that may never come. The push latency is
+`REFRESH_INTERVAL / 2`, or 0.5s if you leave it unset.
+
+The non-obvious half is *un*subscribing. There is no teardown hook on the factory,
+and `app.running` races the server (the factory runs before the app's task
+starts). Use `on_event=` instead: `session.ended` fires on every way out - quit,
+idle timeout, dropped TCP, `stop()` - and carries the `session_id` the factory
+registered under. Test it by closing a client's terminal rather than pressing
+Ctrl+Q; that is the path a hand-rolled subscriber list gets wrong.
+
+Full write-ups: <https://thomas-villani.github.io/wijjit-ssh/examples/>
+
 ## Done
 
 - **Async byte-decoded input.** Raw channel bytes are decoded into Wijjit
@@ -234,8 +267,9 @@ hook that raises is logged and swallowed; it can't take a session down.
 ## Documentation
 
 Full docs at **<https://thomas-villani.github.io/wijjit-ssh/>** — quickstart,
-guides for each of the subjects above, and an API reference over all eight
-modules. See [`spec.md`](spec.md) for the full plan and remaining milestones.
+guides for each of the subjects above, write-ups of the examples, and an API
+reference over all eight modules. See [`SPEC.md`](SPEC.md) for the full plan and
+remaining milestones.
 
 ## Development
 
@@ -264,6 +298,9 @@ The docs are a separate dependency group, so a test run doesn't pay for Sphinx:
 uv sync --group docs
 uv run sphinx-build -b html -W --keep-going docs/source docs/build/html
 ```
+
+`psutil` is likewise its own `examples` group — only `dashboard_ssh.py` wants it,
+and nobody running the tests should have to build a C extension for it.
 
 `-W` is what CI uses; the build is warning-clean, and keeping it that way is the
 point of the flag.

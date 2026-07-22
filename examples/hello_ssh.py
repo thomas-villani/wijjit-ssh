@@ -61,8 +61,10 @@ def make_app(session: SSHSession) -> Wijjit:
             count=app.state["count"],
         )
 
+    # Action handlers are always called with the ActionEvent, so the parameter
+    # is not optional even when the handler ignores it.
     @app.on_action("greet")
-    def greet():
+    def greet(event=None):
         app.state["count"] += 1
 
     return app

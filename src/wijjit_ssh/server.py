@@ -484,7 +484,7 @@ class _WijjitSSHSession(asyncssh.SSHServerSession[bytes]):
         looking at a frozen frame with no cursor.
 
         That is also why ``message`` is written *after* the task finishes rather
-        than before. spec.md §8 says idle timeout should "notify + close", which
+        than before. SPEC.md §8 says idle timeout should "notify + close", which
         reads as write-then-close, but a write while the app still owns the
         screen lands inside the TUI frame and gets painted over by the next
         repaint. Only once the app has exited the alternate buffer is there an
