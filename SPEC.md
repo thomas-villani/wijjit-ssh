@@ -13,9 +13,9 @@ tests, and packaging.
 - **M3 — robust lifecycle (§7–§10).** Done. Host keys, resource limits,
   per-session logging + metrics hook, and graceful shutdown. `ServerConfig` was
   pulled forward from M4, since M3 introduced the twelve knobs it exists to hold.
-- **M4 — packaging, CI, docs.** In progress. Packaging metadata, CI, and the
-  Sphinx docs site are landed; the second example and the §12 deployment
-  artifacts are not.
+- **M4 — packaging, CI, docs.** In progress. Packaging metadata, CI, the Sphinx
+  docs site, and the first two examples are landed; the remaining two examples
+  and the §12 deployment artifacts are not.
 
 334 tests (338 on POSIX, where four Windows-skipped tests run). §4, §5 and §7–§10
 below now describe the code rather than a plan. The remaining work is the rest of
@@ -121,7 +121,10 @@ wijjit-ssh/
     logging.py                per-session logging + events    (§9)          [done]
   examples/
     hello_ssh.py              minimal demo                                  [done]
-    dashboard_ssh.py          auth + multiple views (TODO, M4)
+    dashboard_ssh.py          shared sampler -> N windows       (§13 M4)    [done]
+    chat_ssh.py               N writers -> N windows            (§13 M4)    [done]
+    ide_ssh.py                editor + sandboxed exec (TODO, M4)
+    store_ssh.py              cart + out-of-band checkout (TODO, M4)
   tests/
     __init__.py               (a package, so helpers import as tests._client)
     _client.py                pyte-backed client harness                    [done]
@@ -633,8 +636,51 @@ listener. Idempotent under a lock; safe on a server that never started.
     from main — so a docs change that breaks the build reddens the PR rather than
     the deploy. It reuses ci.yml's two-checkout arrangement, since autodoc has to
     import `wijjit_ssh`, which imports `wijjit`.
-  - **Examples & deployment. [TODO]** Second example (`dashboard_ssh.py`, auth +
-    multiple views). The §12 deployment material is written alongside the work it
+  - **Examples. [DONE for the first two.]** The original plan said "second
+    example: auth + multiple views", which would have demonstrated nothing a
+    local Wijjit app does not. The gap worth closing is the one that only exists
+    over SSH: **N live apps in one process, sharing state, pushed to from outside
+    their own task.** So there are two, from opposite ends of it —
+    `dashboard_ssh.py` (one sampler fanning out to N viewers) and `chat_ssh.py`
+    (N writers fanning out to N viewers) — plus a `docs/source/examples/` section
+    carrying the shared explanation once rather than twice.
+
+    Two things came out of building them that the spec had not anticipated:
+
+    - **`on_event` is the unsubscribe hook**, not just a metrics hook. A shared
+      hub holding apps must drop them, the factory has no teardown callback, and
+      the obvious in-app signal races: `session_started` calls the factory and
+      *then* `ensure_future(_run_app())`, so a subscriber exists while
+      `app.running` is still `False`, and a broadcast landing in that window
+      would evict a live session. `session.ended` has no such gap and covers
+      every exit — quit, idle timeout, `connection_lost`, drain. Both examples
+      use it; both were verified against an aborted connection, not just a
+      polite Ctrl+Q.
+    - **Cross-session push has a latency floor** set by the event loop's input
+      poll: `REFRESH_INTERVAL / 2`, or the 0.5s fallback when it is unset. That
+      makes `REFRESH_INTERVAL` the dial for any multi-session app, at the cost of
+      redrawing on that cadence whether or not anything changed. Documented on
+      the examples index; worth re-measuring in M5's load test alongside the
+      `max_sessions` sizing rule.
+
+    Also fixed in passing: `hello_ssh.py`'s Greet button had **never worked**.
+    Action handlers are always called with the `ActionEvent`, and the handler
+    took no parameters, so every press raised `TypeError` into
+    `_dispatch_action`'s catch and the counter stayed at 0. It was the repo's
+    only example and the README's headline demo. Nothing tests the examples —
+    which is the argument for the tests that should ship with `ide_ssh.py`.
+  - **Examples, remaining. [TODO]** `ide_ssh.py`: `{% splitpanel %}` +
+    `{% tree %}` + `{% codeeditor %}` over `wijjit.helpers.load_filesystem_tree`,
+    with execution as a no-shell subprocess — fixed interpreter argv, every path
+    `resolve()`d and checked with `is_relative_to` against a whitelist of roots,
+    `cwd` pinned inside the root, wall-clock timeout, output capped. The framing
+    is the point: this package guarantees *no* exec surface (§1), and the example
+    is what deliberately reopening one looks like when the trust boundary is
+    somewhere you can see it. **Ships with tests** for the path sandbox — it is
+    the first example with a security boundary in it. `store_ssh.py`: catalog and
+    per-user cart, with checkout deliberately out of band (a payment-link URL
+    rendered as text), because card data must never touch the SSH session.
+  - **Deployment. [TODO]** The §12 material is written alongside the work it
     describes, not ahead of it: it ships as real artifacts (a systemd unit, a
     Dockerfile, a scripted healthcheck) that a docs page then describes, so the
     snippets are things that have been run rather than things that were typed.

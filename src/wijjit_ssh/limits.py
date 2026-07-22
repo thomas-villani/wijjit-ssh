@@ -16,7 +16,7 @@ over-SSH tests to prove only that the wiring is connected - the same split that
 
 Two chokepoints, not one
 ------------------------
-``spec.md`` §8 lists "per-IP concurrency + connect rate limit" as one bullet, but
+``SPEC.md`` §8 lists "per-IP concurrency + connect rate limit" as one bullet, but
 they cannot share a hook, and the difference is load-bearing:
 
 * **Per-IP limits and the rate limit are pre-authentication**, checked when the

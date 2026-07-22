@@ -11,7 +11,7 @@ Nothing released yet. `wijjit-ssh` is at `0.0.1` and cannot publish until
 [`wijjit`](https://github.com/thomas-villani/wijjit) 0.1.0 is on PyPI, since
 `pyproject.toml` still resolves it from a sibling checkout. The work below is the
 history from the original prototype to a deployable server, by milestone
-(see [`spec.md`](spec.md)).
+(see [`SPEC.md`](SPEC.md)).
 
 ### Added
 
@@ -60,8 +60,29 @@ history from the original prototype to a deployable server, by milestone
   authentication, host keys, limits, shutdown, logging, and the terminal input path,
   and an autodoc API reference over all eight modules — built with warnings as errors
   and published to GitHub Pages.
+- **Two examples about serving many sessions at once (M4).**
+  `examples/dashboard_ssh.py` is a live server dashboard — CPU and memory gauges, a
+  history chart, the heaviest processes, and a table of everyone connected to the
+  server drawing it — fed by a *single* sampler task that starts on the first viewer
+  and stops after the last, and that does its `psutil` work in `asyncio.to_thread`
+  because every session shares one event loop. `examples/chat_ssh.py` is a multi-user
+  chat room with no user accounts at all, since SSH authenticated everyone before the
+  app existed. Both demonstrate the two things that only come up over SSH: pushing to
+  a session from outside its own task with `app.refresh()` (latency
+  `REFRESH_INTERVAL / 2`, or the loop's 0.5s fallback), and using `on_event`'s
+  `session.ended` to unsubscribe — the only signal that covers a dropped connection as
+  well as a polite quit. Written up under `docs/source/examples/`. `psutil` is declared
+  in a new PEP 735 `examples` group, so `uv sync` for the test suite does not build it.
 
 ### Fixed
+
+- **`hello_ssh.py`'s Greet button never worked.** Action handlers are always called
+  with the `ActionEvent`, and the handler took no parameters, so every press raised
+  `TypeError` into `_dispatch_action`'s catch and the counter stayed at 0. This was the
+  repo's only example and the README's headline demo; nothing tests the examples.
+- **`SPEC.md` was excluded from the sdist.** The `[tool.hatch.build.targets.sdist]`
+  include list and the README's link both said `spec.md`, which matches nothing on a
+  case-sensitive filesystem.
 
 - **Session teardown ended every session by cancellation.** `connection_lost` called
   `app.quit()` and `task.cancel()` in the same tick, but `quit()` only sets a flag the

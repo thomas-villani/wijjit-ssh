@@ -100,6 +100,12 @@ a client that stops reading buffers frames in ``asyncssh`` without bound. See
 
 .. toctree::
    :maxdepth: 2
+   :caption: Examples
+
+   examples/index
+
+.. toctree::
+   :maxdepth: 2
    :caption: API reference
 
    api/server
