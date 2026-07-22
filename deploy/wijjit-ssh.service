@@ -1,0 +1,107 @@
+# systemd unit for a wijjit-ssh server.
+#
+#   install -m 0644 wijjit-ssh.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now wijjit-ssh
+#
+# Adjust ExecStart and WorkingDirectory to your application. Everything else is
+# meant to be used as-is; the comments explain what would break if you changed
+# it.
+
+[Unit]
+Description=wijjit-ssh - a Wijjit TUI application served over SSH
+Documentation=https://thomas-villani.github.io/wijjit-ssh/
+# network-online, not network: binding a specific address before it is
+# configured fails at startup, and Restart=on-failure would then retry into the
+# same race.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=wijjit
+Group=wijjit
+
+WorkingDirectory=/opt/wijjit-app
+ExecStart=/opt/wijjit-app/.venv/bin/python -m myapp
+
+# Creates and owns /var/lib/wijjit-ssh (0700), and keeps it across restarts and
+# package upgrades. This is where the host key lives. Getting persistence wrong
+# is the single most common wijjit-ssh deployment fault: a regenerated host key
+# gives every returning user REMOTE HOST IDENTIFICATION HAS CHANGED, which
+# teaches them to ignore the one warning that matters.
+StateDirectory=wijjit-ssh
+StateDirectoryMode=0700
+Environment=WIJJIT_SSH_HOST_KEY=/var/lib/wijjit-ssh/host_key
+
+Restart=on-failure
+RestartSec=2
+
+# --- Shutdown ---------------------------------------------------------------
+#
+# run() drains on SIGTERM: it stops accepting, asks each session to quit so the
+# app's teardown restores the client's terminal, waits shutdown_grace, then
+# closes what is left.
+#
+# TimeoutStopSec MUST exceed shutdown_grace (default 5.0) with room to spare. If
+# it does not, systemd sends SIGKILL mid-drain and every connected user is left
+# in the alternate screen buffer with a wedged terminal - which is the exact
+# outcome the grace period exists to prevent.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# Signal the main process only. KillMode=control-group (the default) would also
+# SIGTERM anything the app spawned, which is fine, but the drain is driven by
+# the server process and it should be the one deciding.
+KillMode=mixed
+
+# --- Hardening --------------------------------------------------------------
+#
+# This process needs a listening socket and its StateDirectory. That is all, and
+# it terminates untrusted connections for a living, so the sandbox is worth the
+# few lines.
+#
+# Verify with:  systemd-analyze security wijjit-ssh.service
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# Drop every capability. Uncomment the two lines below ONLY if you bind port 22
+# directly - and prefer a reverse proxy or a redirect rule, since port 22 also
+# collides with the system sshd you probably still want for administration.
+CapabilityBoundingSet=
+AmbientCapabilities=
+#CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+#AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# Left off deliberately: MemoryDenyWriteExecute. It is a good default in general,
+# but it breaks any dependency that JITs, and an app's own dependencies are not
+# this unit's to predict. Add it if your stack tolerates it.
+
+# --- Resources --------------------------------------------------------------
+#
+# max_sessions is really a memory bound - each session is a live Wijjit app - and
+# its default of 100 is an unmeasured guess (SPEC.md §14). A hard MemoryMax turns
+# "the box started swapping" into "the service restarted", which is the failure
+# you would rather have. Size it against your own app.
+#MemoryMax=1G
+# One file descriptor per connection, plus the app's own.
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

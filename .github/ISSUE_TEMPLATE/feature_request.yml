@@ -1,0 +1,58 @@
+name: Feature request
+description: Propose something this should do and does not
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        [`SPEC.md`](https://github.com/thomas-villani/wijjit-ssh/blob/main/SPEC.md)
+        is the plan of record — §13 is the milestone list and §14 the open
+        questions. Worth a look first: the thing you want may already be
+        scheduled, or deliberately excluded.
+
+        Deliberately excluded, and not up for reconsideration: shell, `exec`,
+        SFTP, and port forwarding. A session only ever runs a Wijjit app, and
+        that guarantee is a feature rather than an omission.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: |
+        What are you trying to build that this gets in the way of? Describe the
+        situation rather than the API you have in mind — the best version of the
+        feature is often not the one the reporter proposed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: If you have a shape for it, sketch the call.
+      render: python
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you are doing instead today
+      description: |
+        Including "nothing, I gave up". How painful the workaround is says more
+        about priority than any argument does.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Authentication
+        - Host keys
+        - Limits, timeouts, lifecycle
+        - Shutdown
+        - Logging and metrics
+        - Terminal input (keys, mouse, paste)
+        - Rendering and terminal capabilities
+        - Docs or examples
+        - Something else
+    validations:
+      required: true

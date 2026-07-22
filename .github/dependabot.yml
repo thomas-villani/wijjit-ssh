@@ -1,0 +1,48 @@
+version: 2
+
+updates:
+  # Pinned action majors (actions/checkout@v7, astral-sh/setup-uv@v7, ...) go
+  # stale silently: nothing fails, the workflow just keeps running an older
+  # runner image until the version is deprecated and every job starts warning
+  # at once.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      # Match the repo's convention: sentence-case subject, no `feat:`/`chore:`
+      # prefixes. See CONTRIBUTING.md.
+      prefix: Bump
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # `uv.lock` is not pinned in CI (`uv sync`, not `uv sync --locked`) because the
+  # wijjit path source makes it move whenever the sibling checkout's own
+  # dependencies do. So these PRs are about the two real pins - asyncssh and the
+  # dev/docs tooling - not about lockfile churn.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: Bump
+    groups:
+      dev-tooling:
+        # One PR for the formatter/linter/type-checker/test stack. They are
+        # updated together or not at all; a black bump that reformats the tree
+        # is not worth its own review round.
+        patterns:
+          - black
+          - ruff
+          - mypy
+          - pytest*
+          - pyte
+      docs:
+        patterns:
+          - sphinx*
+          - myst-parser
+    ignore:
+      # Resolved from ../wijjit until it publishes; there is nothing for
+      # dependabot to update and it cannot see the path source anyway.
+      - dependency-name: wijjit

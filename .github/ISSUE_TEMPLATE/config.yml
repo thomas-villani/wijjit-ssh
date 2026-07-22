@@ -1,0 +1,20 @@
+# Blank issues stay on: not every report is a bug or a feature, and a question
+# forced into the bug template is a worse question.
+blank_issues_enabled: true
+
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/thomas-villani/wijjit-ssh/security/advisories/new
+    about: Report privately. This is an SSH server; please do not open a public issue.
+
+  - name: Documentation
+    url: https://thomas-villani.github.io/wijjit-ssh/
+    about: Quickstart, guides, worked examples, and the API reference.
+
+  - name: Wijjit itself
+    url: https://github.com/thomas-villani/wijjit/issues
+    about: Widgets, templates, layout, and rendering live in the framework, not the SSH server.
+
+  - name: asyncssh
+    url: https://github.com/ronf/asyncssh/issues
+    about: SSH protocol, ciphers, and key formats belong upstream.
