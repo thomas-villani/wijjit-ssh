@@ -1,6 +1,7 @@
 # wijjit-ssh
 
 [![CI](https://github.com/thomas-villani/wijjit-ssh/actions/workflows/ci.yml/badge.svg)](https://github.com/thomas-villani/wijjit-ssh/actions/workflows/ci.yml)
+[![Docs](https://github.com/thomas-villani/wijjit-ssh/actions/workflows/docs.yml/badge.svg)](https://thomas-villani.github.io/wijjit-ssh/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -230,7 +231,11 @@ hook that raises is logged and swallowed; it can't take a session down.
 - Wide chars / emoji are treated as single-width (a Wijjit limitation, not an
   SSH one).
 
-See [`spec.md`](spec.md) for the full plan and remaining milestones.
+## Documentation
+
+Full docs at **<https://thomas-villani.github.io/wijjit-ssh/>** — quickstart,
+guides for each of the subjects above, and an API reference over all eight
+modules. See [`spec.md`](spec.md) for the full plan and remaining milestones.
 
 ## Development
 
@@ -253,6 +258,16 @@ uv run pytest --cov=src/wijjit_ssh --cov-report=term-missing -q
 ```
 
 Those are exactly the commands CI runs, so a clean local run means a green build.
+The docs are a separate dependency group, so a test run doesn't pay for Sphinx:
+
+```bash
+uv sync --group docs
+uv run sphinx-build -b html -W --keep-going docs/source docs/build/html
+```
+
+`-W` is what CI uses; the build is warning-clean, and keeping it that way is the
+point of the flag.
+
 The four skips are all POSIX-only - three `0600` host-key mode-bit assertions and
 the end-to-end SIGTERM drain - so on Linux and macOS the suite reports 338 passed.
 CI covers Python 3.11-3.13 on Linux, macOS, and Windows.

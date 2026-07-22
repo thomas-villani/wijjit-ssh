@@ -53,6 +53,13 @@ history from the original prototype to a deployable server, by milestone
   A hook that raises is logged and swallowed rather than taking a session down.
 - **Non-PTY refusal.** A session that never requests a PTY is declined with a friendly
   message; this server only serves interactive TUIs.
+- **PEP 561 marker (M4).** `py.typed` ships in the wheel. The tree was already
+  `mypy --strict` clean and fully annotated, but without the marker every downstream
+  type checker silently treated it as untyped.
+- **Documentation site (M4).** A Sphinx site under `docs/` — quickstart, guides for
+  authentication, host keys, limits, shutdown, logging, and the terminal input path,
+  and an autodoc API reference over all eight modules — built with warnings as errors
+  and published to GitHub Pages.
 
 ### Fixed
 

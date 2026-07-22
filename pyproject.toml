@@ -72,6 +72,16 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
 ]
+# Not in `dev`, and so not installed by a plain `uv sync`: Sphinx and its theme
+# pull in a couple of dozen packages that a contributor running the test suite
+# has no use for. `uv sync --group docs` when you want to build the site.
+docs = [
+    "sphinx>=8.2",
+    "sphinx-rtd-theme>=3.0",
+    "sphinx-copybutton>=0.5.2",
+    "sphinx-tabs>=3.4.7",
+    "myst-parser>=2.0",
+]
 
 [tool.hatch.version]
 path = "src/wijjit_ssh/__init__.py"
