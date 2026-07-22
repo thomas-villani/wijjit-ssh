@@ -21,6 +21,7 @@ classifiers = [
     "Intended Audience :: System Administrators",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -98,16 +99,31 @@ packages = ["src/wijjit_ssh"]
 
 # Explicit sdist contents so the build is deterministic and never walks stray
 # local directories (this repo keeps a .venv/ in tree).
+#
+# Every pattern is anchored with a leading "/". Hatchling matches these
+# gitignore-style, so a bare `examples` matches a directory of that name at ANY
+# depth - which silently pulled `docs/source/examples/*.rst` into the sdist while
+# the rest of docs/ stayed out. Anchoring says the repository root and means it.
+#
+# docs/ is listed as its two source paths rather than as `/docs`, so `docs/build`
+# cannot arrive here even if someone builds the site before running `uv build`.
 [tool.hatch.build.targets.sdist]
 include = [
-    "src/wijjit_ssh",
-    "tests",
-    "examples",
-    "README.md",
-    "CHANGELOG.md",
-    "LICENSE",
-    "SPEC.md",
-    "pyproject.toml",
+    "/src/wijjit_ssh",
+    "/tests",
+    "/examples",
+    "/deploy",
+    "/docs/source",
+    "/docs/Makefile",
+    "/docs/make.bat",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/CONTRIBUTING.md",
+    "/SECURITY.md",
+    "/RELEASING.md",
+    "/LICENSE",
+    "/SPEC.md",
+    "/pyproject.toml",
 ]
 
 [tool.pytest.ini_options]

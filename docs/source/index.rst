@@ -97,12 +97,20 @@ a client that stops reading buffers frames in ``asyncssh`` without bound. See
    guide/shutdown
    guide/logging
    guide/terminal_input
+   guide/deployment
 
 .. toctree::
    :maxdepth: 2
    :caption: Examples
 
    examples/index
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Project
+
+   changelog
+   contributing
 
 .. toctree::
    :maxdepth: 2

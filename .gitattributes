@@ -1,0 +1,19 @@
+# Normalise line endings in the repository to LF, whatever a contributor's
+# core.autocrlf happens to be. Without this the setting is per-clone, and the
+# first Windows contributor with autocrlf=false commits a whole file as CRLF.
+#
+# It matters more than usual here because some of these files are consumed by
+# things that do not tolerate CRLF: a systemd unit, a Dockerfile, and shell
+# scripts inside the GitHub workflows.
+* text=auto eol=lf
+
+# Except the one file that is a Windows batch script and must have CRLF in the
+# working tree to run.
+*.bat text eol=crlf
+
+# Keep the diff readable on a release: uv.lock is generated, large, and never
+# usefully reviewed line by line.
+uv.lock linguist-generated=true -diff
+
+# Not the project's own code, for the language statistics on the repo page.
+docs/build/** linguist-documentation

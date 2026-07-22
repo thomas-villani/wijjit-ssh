@@ -564,7 +564,12 @@ listener. Idempotent under a lock; safe on a server that never started.
 
 ---
 
-## 12. Deployment notes (README material)
+## 12. Deployment notes — **done**
+
+Shipped as `deploy/` (systemd unit, Dockerfile, compose file, healthcheck)
+plus `docs/source/guide/deployment.rst`. The outline below is what was
+planned; the guide is what was built, and the M4 entry in §13 records what
+the work turned up that this list did not anticipate.
 
 - **Run:** `ensure_host_key("ssh_host_key")`, `WijjitSSH(make_app, auth=...).run()`.
 - **systemd:** simple unit, `Restart=on-failure`, a dedicated unprotected user,
@@ -680,10 +685,41 @@ listener. Idempotent under a lock; safe on a server that never started.
     the first example with a security boundary in it. `store_ssh.py`: catalog and
     per-user cart, with checkout deliberately out of band (a payment-link URL
     rendered as text), because card data must never touch the SSH session.
-  - **Deployment. [TODO]** The §12 material is written alongside the work it
-    describes, not ahead of it: it ships as real artifacts (a systemd unit, a
-    Dockerfile, a scripted healthcheck) that a docs page then describes, so the
-    snippets are things that have been run rather than things that were typed.
+  - **Deployment. [DONE]** The §12 material, as real artifacts rather than
+    snippets: `deploy/` holds a sandboxed systemd unit, a non-root Dockerfile, a
+    compose file, and `healthcheck.py`, with `docs/source/guide/deployment.rst`
+    describing the choices in them and carrying the security checklist.
+
+    The healthcheck is the piece that turned out to have a real argument in it.
+    The obvious probe — a TCP connect — is a false-healthy: a process that
+    accepted the socket and then wedged still completes the handshake, because
+    the kernel does it without the application ever being scheduled. So the probe
+    completes the SSH version and key exchange (which needs a live event loop, a
+    loadable host key, and a working transport) and then offers no credentials at
+    all, treating the resulting `PermissionDenied` as the success condition:
+    being told "no" proves the server reached its auth policy. All three exit
+    paths were verified against a live server. It never authenticates, so it
+    never starts a session and never counts against `max_sessions` — but it *is*
+    an ordinary connection, so it counts against `max_per_ip` and `connect_rate`,
+    which is a real way to configure a healthy server into reporting itself dead.
+
+    The other thing worth recording is that the supervisor can undo §8's drain
+    entirely. If `TimeoutStopSec` (systemd) or `stop_grace_period` (compose) is
+    shorter than `shutdown_grace`, the supervisor sends SIGKILL mid-drain, no
+    session runs its teardown, and every connected user keeps a wedged terminal —
+    the exact outcome the grace period exists to prevent. Both files set it high
+    and say why.
+  - **Release pipeline. [DONE]** Not in the original M4 list, but a package that
+    cannot be published is not packaged. `release.yml` publishes on a `v*` tag
+    through PyPI Trusted Publishing, and its `verify` job encodes the
+    preconditions that are easy to forget: tag matches `__version__`, the
+    changelog has a matching section, `py.typed` is in the wheel, and
+    `[tool.uv.sources]` is gone. That last one is the load-bearing check —
+    while the path source exists, `wijjit>=0.1.0` has never been resolved from
+    the real index by anything in this repo, and PyPI does not allow a version
+    number to be reused once that is discovered. `RELEASING.md`, `CONTRIBUTING.md`,
+    and `SECURITY.md` cover the procedure, the conventions, and the trust
+    boundary respectively.
 - **M5 — Hardening pass.** Backpressure handling + the §9 byte counters (shared
   `_ChannelWriter` seam), bracketed-paste + mouse edge cases, fuzz the decoder,
   load test (hundreds of concurrent sessions).

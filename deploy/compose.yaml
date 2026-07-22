@@ -1,0 +1,44 @@
+# docker compose -f deploy/compose.yaml up --build
+#
+# Mostly here for one reason: the named volume. The host key must outlive the
+# container, and a compose file makes that structural rather than something you
+# have to remember to type on every `docker run`.
+
+services:
+  wijjit-ssh:
+    build:
+      # The repository root, not deploy/ - the image copies the example app and
+      # the healthcheck from two different directories.
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "8022:8022"
+    volumes:
+      - hostkey:/var/lib/wijjit-ssh
+    restart: unless-stopped
+
+    # Must exceed shutdown_grace (default 5.0s), or compose sends SIGKILL
+    # mid-drain and every connected user keeps a wedged terminal. Docker's
+    # default is 10s; this is explicit because it is the number people forget.
+    stop_grace_period: 30s
+    # Redundant with the Dockerfile's exec-form CMD, but harmless insurance that
+    # SIGTERM reaches the server rather than a shell.
+    init: false
+
+    # Enforced independently of the app's own max_sessions, which is a guess
+    # (SPEC.md §14). Reaching this restarts the container instead of pushing the
+    # host into swap.
+    mem_limit: 512m
+
+    # The container serves SSH and writes to its state volume. It has no reason
+    # to write anywhere else.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  hostkey:

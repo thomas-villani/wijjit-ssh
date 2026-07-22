@@ -1,0 +1,85 @@
+name: Bug report
+description: Something behaves differently than documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two things worth knowing before you fill this in:
+
+        - **Security issues do not go here.** See
+          [SECURITY.md](https://github.com/thomas-villani/wijjit-ssh/blob/main/SECURITY.md)
+          for the private reporting channel.
+        - **Known gaps are listed** in the README under "Not yet hardened" and in
+          `SPEC.md` §13–14. No backpressure handling, in particular, is a known
+          and scheduled gap rather than a bug.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: And what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        The smallest server that shows it. A factory, a view, and the
+        `WijjitSSH(...)` call is usually enough — and if you can trigger it with
+        one of the programs in `examples/`, say which.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Output from the `wijjit_ssh` logger tree, ideally at DEBUG
+        (`configure_logging(level="DEBUG")`). Each line carries the session id,
+        username, and peer address, which is usually what narrows this down.
+
+        Scrub anything private — but note that this package never logs
+        credentials, so there should be none in there.
+      render: text
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`uv run python -c \"import wijjit_ssh; print(wijjit_ssh.__version__)\"`, plus the wijjit and asyncssh versions."
+      placeholder: "wijjit-ssh 0.1.0, wijjit 0.1.0, asyncssh 2.21.0"
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: Server OS and Python
+      placeholder: "Ubuntu 24.04, Python 3.12.7"
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: SSH client
+      description: |
+        Ask for it with `ssh -V`. Worth asking about because it is a real source
+        of difference: PuTTY and Windows Terminal encode Alt and the function
+        keys differently from OpenSSH, and the input decoder sees exactly what
+        the client sent.
+      placeholder: "OpenSSH_9.6p1, or PuTTY 0.81, or Windows Terminal"
+
+  - type: checkboxes
+    id: pty
+    attributes:
+      label: Session shape
+      options:
+        - label: The client requested a PTY (a session without one is refused by design)
+        - label: More than one session was connected at the time
+        - label: It happens on a fresh server with no other clients

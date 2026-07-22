@@ -2,8 +2,9 @@
 
 [![CI](https://github.com/thomas-villani/wijjit-ssh/actions/workflows/ci.yml/badge.svg)](https://github.com/thomas-villani/wijjit-ssh/actions/workflows/ci.yml)
 [![Docs](https://github.com/thomas-villani/wijjit-ssh/actions/workflows/docs.yml/badge.svg)](https://thomas-villani.github.io/wijjit-ssh/)
+[![codecov](https://codecov.io/gh/thomas-villani/wijjit-ssh/branch/main/graph/badge.svg)](https://codecov.io/gh/thomas-villani/wijjit-ssh)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/thomas-villani/wijjit-ssh/blob/main/LICENSE)
 
 **Flask for SSH apps.** Serve [Wijjit](https://github.com/thomas-villani/wijjit) TUI
 applications over SSH: Wijjit draws the UI, `asyncssh` handles the transport and
@@ -125,7 +126,7 @@ and logs at WARNING when it generates - if you see that on every restart, your
 
 Bounded by default, because a limit that's opt-in isn't a limit in any
 deployment where nobody thought about it. Every value below is a
-[`ServerConfig`](src/wijjit_ssh/config.py) field, settable as a keyword:
+[`ServerConfig`](https://github.com/thomas-villani/wijjit-ssh/blob/main/src/wijjit_ssh/config.py) field, settable as a keyword:
 
 ```python
 WijjitSSH(
@@ -200,15 +201,46 @@ For metrics, pass `on_event=` - called with `connection.opened|closed|rejected`,
 can wire up Prometheus without this package depending on a metrics library. A
 hook that raises is logged and swallowed; it can't take a session down.
 
+## Deployment
+
+Reference artifacts live in [`deploy/`](https://github.com/thomas-villani/wijjit-ssh/tree/main/deploy/)
+— a sandboxed systemd unit, a non-root Dockerfile, a compose file, and a
+healthcheck. All four are files you can run, not snippets to adapt.
+
+```bash
+sudo install -m 0644 deploy/wijjit-ssh.service /etc/systemd/system/
+docker compose -f deploy/compose.yaml up --build
+python deploy/healthcheck.py --port 8022 --verbose
+```
+
+Three things go wrong far more often than anything else:
+
+- **The host key is not persistent.** Every returning user then gets
+  `REMOTE HOST IDENTIFICATION HAS CHANGED`, which trains them to ignore the one
+  warning that protects them. Mount a volume, use `StateDirectory`, and watch for
+  `ensure_host_key`'s WARNING on restart — it is telling you the storage isn't.
+- **The supervisor's stop timeout is shorter than `shutdown_grace`.** Then it
+  sends `SIGKILL` mid-drain, no session runs its teardown, and every connected
+  user keeps a wedged terminal. `TimeoutStopSec` and `stop_grace_period` must
+  both exceed it.
+- **The healthcheck is a TCP connect.** A wedged event loop still answers a TCP
+  handshake — the kernel completes it without the application — so the probe
+  reports healthy while nobody can log in. `deploy/healthcheck.py` instead
+  completes the SSH key exchange and treats being refused at authentication as
+  the success condition.
+
+Full write-up, including the production security checklist:
+<https://thomas-villani.github.io/wijjit-ssh/guide/deployment.html>
+
 ## Examples
 
-Three runnable programs in [`examples/`](examples/), in the order worth reading:
+Three runnable programs in [`examples/`](https://github.com/thomas-villani/wijjit-ssh/tree/main/examples/), in the order worth reading:
 
 | Example | What it is for |
 |---|---|
-| [`hello_ssh.py`](examples/hello_ssh.py) | The smallest thing that works: one factory, one view, a text field and a counter. |
-| [`dashboard_ssh.py`](examples/dashboard_ssh.py) | A live server dashboard - gauges, history, top processes, and a table of everyone connected to the server drawing it. One shared sampler feeding N windows. |
-| [`chat_ssh.py`](examples/chat_ssh.py) | A multi-user chat room with no user accounts, because SSH already authenticated everyone. N writers feeding N windows. |
+| [`hello_ssh.py`](https://github.com/thomas-villani/wijjit-ssh/blob/main/examples/hello_ssh.py) | The smallest thing that works: one factory, one view, a text field and a counter. |
+| [`dashboard_ssh.py`](https://github.com/thomas-villani/wijjit-ssh/blob/main/examples/dashboard_ssh.py) | A live server dashboard - gauges, history, top processes, and a table of everyone connected to the server drawing it. One shared sampler feeding N windows. |
+| [`chat_ssh.py`](https://github.com/thomas-villani/wijjit-ssh/blob/main/examples/chat_ssh.py) | A multi-user chat room with no user accounts, because SSH already authenticated everyone. N writers feeding N windows. |
 
 ```bash
 uv run python examples/hello_ssh.py                          # :8022
@@ -268,7 +300,7 @@ Full write-ups: <https://thomas-villani.github.io/wijjit-ssh/examples/>
 
 Full docs at **<https://thomas-villani.github.io/wijjit-ssh/>** — quickstart,
 guides for each of the subjects above, write-ups of the examples, and an API
-reference over all eight modules. See [`SPEC.md`](SPEC.md) for the full plan and
+reference over all eight modules. See [`SPEC.md`](https://github.com/thomas-villani/wijjit-ssh/blob/main/SPEC.md) for the full plan and
 remaining milestones.
 
 ## Development
@@ -317,3 +349,27 @@ pushed instead.
 Once `wijjit` is published, delete the `[tool.uv.sources]` section - the
 dependency pin already says what it needs. (`uv` strips that section from
 published metadata, so it never affects anyone installing the package.)
+
+[`CONTRIBUTING.md`](https://github.com/thomas-villani/wijjit-ssh/blob/main/CONTRIBUTING.md)
+has the rest: style rules, what the tests are expected to look like, the commit
+conventions, and what is deliberately out of scope.
+[`RELEASING.md`](https://github.com/thomas-villani/wijjit-ssh/blob/main/RELEASING.md)
+covers cutting a version.
+
+## Security
+
+This is an SSH server: it terminates untrusted connections and authenticates
+them. **Report vulnerabilities privately**, through
+[GitHub Security Advisories](https://github.com/thomas-villani/wijjit-ssh/security/advisories/new)
+rather than a public issue.
+[`SECURITY.md`](https://github.com/thomas-villani/wijjit-ssh/blob/main/SECURITY.md)
+says what is in scope, what is a known and documented gap rather than a finding,
+and where the trust boundary sits.
+
+The load-bearing guarantee is negative: **no shell, no `exec`, no SFTP, no port
+forwarding**. Those asyncssh handlers are never implemented, so a session has no
+code path to anything but your Wijjit app.
+
+## License
+
+MIT — see [`LICENSE`](https://github.com/thomas-villani/wijjit-ssh/blob/main/LICENSE).

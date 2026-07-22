@@ -1,0 +1,202 @@
+name: Release
+
+# Build the distributions and publish them to PyPI.
+#
+# Trigger: pushing a tag like `v0.1.0`. The tag is the release; nothing here
+# reads a version from anywhere else, and the `verify` job below refuses to
+# build if the tag and `wijjit_ssh.__version__` disagree.
+#
+# One-time setup on PyPI: create a *pending* trusted publisher for the project
+# (PyPI -> Your projects -> Publishing, or the "pending publisher" form if the
+# name is not registered yet) with:
+#     owner            thomas-villani
+#     repository       wijjit-ssh
+#     workflow         release.yml
+#     environment      pypi
+# That is what makes the `id-token: write` permission below sufficient. There is
+# no API token to store, rotate, or leak - see RELEASING.md.
+#
+# `workflow_dispatch` publishes to TestPyPI instead, for a rehearsal. Do that
+# once before the first real tag: a name is claimed on first upload and a bad
+# 0.1.0 cannot be replaced, only yanked.
+#
+# Unlike ci.yml and docs.yml this checks out ONE repository. Those two need the
+# sibling `../wijjit` checkout because they import the package; a build does not.
+# `uv build` runs hatchling in an isolated environment with only the
+# `[build-system] requires`, and never resolves `[project] dependencies` at all.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify release preconditions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # A published wheel whose dependency cannot be resolved is worse than no
+      # wheel: `pip install wijjit-ssh` fails for everyone, and the fix is a new
+      # release, because a version cannot be re-uploaded.
+      #
+      # uv strips [tool.uv.sources] from published metadata, so its presence does
+      # not corrupt the artifact - it means `wijjit>=0.1.0` has never actually
+      # been resolved from PyPI by anything, here or in CI. Refuse to find out
+      # from a user's traceback.
+      - name: Refuse to release while wijjit resolves from a path
+        run: |
+          if grep -q '^\[tool\.uv\.sources\]' pyproject.toml; then
+            echo "::error file=pyproject.toml::[tool.uv.sources] is still present."
+            echo "wijjit must be on PyPI, and that section removed, before releasing."
+            echo "See RELEASING.md."
+            exit 1
+          fi
+
+      # The dependency pin has to hold against the real index, not a sibling
+      # checkout. This is the first moment in the whole pipeline where that is
+      # true, which is exactly why it is worth a job of its own.
+      - name: Resolve dependencies from PyPI
+        run: uv sync --locked --no-dev
+
+      - name: Check the tag matches __version__
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(uv run python -c 'import wijjit_ssh; print(wijjit_ssh.__version__)')"
+          echo "tag=$tag  __version__=$pkg"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match __version__ $pkg."
+            exit 1
+          fi
+
+      # A tag whose version has no changelog entry is a release nobody can read
+      # the notes for - and the release job below publishes that section verbatim.
+      - name: Check the changelog has an entry for this version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! grep -q "^## \[$version\]" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::No '## [$version]' section found."
+            exit 1
+          fi
+
+  build:
+    name: Build distributions
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      # Catches the metadata problems that only surface on upload, when the
+      # version is already burned: an unrenderable README (PyPI shows a blank
+      # description and there is no fixing it in place) or a malformed field.
+      - name: Check the metadata renders
+        run: uvx twine check --strict dist/*
+
+      # `wijjit_ssh/py.typed` is the whole reason downstream type checkers honour
+      # this package's annotations, and it is a single file that a change to the
+      # hatch build config could silently drop. Assert it rather than trust it.
+      - name: Assert py.typed shipped in the wheel
+        run: |
+          python -m zipfile -l dist/*.whl | grep -q 'wijjit_ssh/py.typed' \
+            || { echo "::error::py.typed is missing from the wheel"; exit 1; }
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dist
+          path: dist/
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    # The rehearsal path: run this workflow by hand, from a branch or a tag,
+    # before the first real release.
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/wijjit-ssh
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/wijjit-ssh
+    permissions:
+      # Trusted Publishing: GitHub mints a short-lived OIDC token that PyPI
+      # exchanges for an upload token scoped to this project. No secret exists.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create the GitHub release
+    # After PyPI, deliberately: the release page is the announcement, and it
+    # should not exist for a version that failed to upload.
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: dist
+          path: dist/
+
+      # Publish the hand-written changelog section rather than
+      # `--generate-notes`, which would produce a list of commit subjects. The
+      # CHANGELOG explains what changed and why; the commit log does not.
+      - name: Extract this version's changelog section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" { found = 1; next }
+            found && /^## \[/        { exit }
+            found                    { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file RELEASE_NOTES.md \
+            dist/*

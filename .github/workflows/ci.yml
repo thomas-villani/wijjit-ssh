@@ -84,19 +84,20 @@ jobs:
         run: uv sync --python 3.11
         working-directory: wijjit-ssh
 
-      # tests/ and examples/ are linted alongside src/, unlike the wijjit repo's
-      # own workflow. They are already clean, so there is no reason to leave them
-      # unguarded.
+      # tests/, examples/, and deploy/ are linted alongside src/, unlike the
+      # wijjit repo's own workflow. They are already clean, so there is no reason
+      # to leave them unguarded - and deploy/healthcheck.py in particular is a
+      # script people copy into a Dockerfile, so it should hold the same bar.
       - name: ruff
-        run: uv run ruff check src/ tests/ examples/
+        run: uv run ruff check src/ tests/ examples/ deploy/
         working-directory: wijjit-ssh
 
       - name: black
-        run: uv run black --check src/ tests/ examples/
+        run: uv run black --check src/ tests/ examples/ deploy/
         working-directory: wijjit-ssh
 
       - name: mypy
-        run: uv run mypy src/
+        run: uv run mypy src/ deploy/
         working-directory: wijjit-ssh
 
   coverage:

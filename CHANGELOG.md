@@ -11,7 +11,7 @@ Nothing released yet. `wijjit-ssh` is at `0.0.1` and cannot publish until
 [`wijjit`](https://github.com/thomas-villani/wijjit) 0.1.0 is on PyPI, since
 `pyproject.toml` still resolves it from a sibling checkout. The work below is the
 history from the original prototype to a deployable server, by milestone
-(see [`SPEC.md`](SPEC.md)).
+(see [`SPEC.md`](https://github.com/thomas-villani/wijjit-ssh/blob/main/SPEC.md)).
 
 ### Added
 
@@ -74,7 +74,51 @@ history from the original prototype to a deployable server, by milestone
   well as a polite quit. Written up under `docs/source/examples/`. `psutil` is declared
   in a new PEP 735 `examples` group, so `uv sync` for the test suite does not build it.
 
+- **Deployment artifacts (M4, spec §12).** `deploy/` ships a systemd unit, a
+  Dockerfile, a compose file, and `healthcheck.py`, with a guide page describing
+  them — written as files that have been run rather than snippets that were typed.
+  The healthcheck is the part with a real argument behind it: a TCP probe passes
+  against a wedged event loop, because the kernel completes the handshake without
+  the application ever being scheduled, so it instead completes the SSH key
+  exchange and treats *being refused at authentication* as the success condition.
+  That proves the loop is running, the host key loads, and the auth policy is
+  reachable. The unit and the compose file both set a stop timeout well above
+  `shutdown_grace`, since a supervisor that kills mid-drain undoes the entire
+  point of the drain. The guide page carries the production security checklist.
+- **Release pipeline (M4).** `.github/workflows/release.yml` publishes on a `v*`
+  tag via PyPI Trusted Publishing — OIDC, so there is no API token to store or
+  leak — then opens a GitHub release with the changelog section as its notes. It
+  refuses to build unless the tag matches `__version__`, the changelog has a
+  matching section, `py.typed` is in the wheel, `twine check --strict` passes,
+  and **`[tool.uv.sources]` is gone**: while that section exists, `wijjit>=0.1.0`
+  has never once been resolved from the real index by anything, here or in CI,
+  and a version number on PyPI cannot be reused after that is discovered.
+  `RELEASING.md` has the procedure and the one-time trusted-publisher setup.
+- **Contributor documentation (M4).** `CONTRIBUTING.md` (setup, the exact checks
+  CI runs, style, the commit conventions the log already follows, and what is
+  deliberately out of scope), `SECURITY.md` (private reporting, what is in scope,
+  and which known gaps are documented limitations rather than findings), issue
+  and PR templates, and a `dependabot.yml` that groups the tooling bumps.
+  `CHANGELOG.md` and `CONTRIBUTING.md` are pages on the docs site now, included
+  rather than copied — which is what `conf.py`'s `myst_parser` had been enabled
+  for since the site was built, and never used.
+
 ### Fixed
+
+- **The sdist quietly included three files from `docs/`.** Hatchling matches
+  `[tool.hatch.build.targets.sdist]` include patterns gitignore-style, so the
+  bare entry `examples` matched a directory of that name at *any* depth and
+  pulled in `docs/source/examples/*.rst` while the rest of the docs stayed out.
+  Every pattern is anchored with a leading `/` now. The list gained `deploy/` and
+  the docs sources deliberately — as `/docs/source` rather than `/docs`, so a
+  locally built `docs/build/` cannot reach a release artifact even if someone
+  builds the site before `uv build`.
+- **Relative links in `README.md` would have rendered broken on PyPI.** The
+  README is the package's long description, and PyPI does not resolve relative
+  links the way GitHub does, so `LICENSE`, `SPEC.md`, and every `examples/`
+  reference pointed nowhere on the page most people would see first. They are
+  absolute now, as is the one in `CHANGELOG.md`, which had the same problem for a
+  different reason once the docs site started including it.
 
 - **`hello_ssh.py`'s Greet button never worked.** Action handlers are always called
   with the `ActionEvent`, and the handler took no parameters, so every press raised
