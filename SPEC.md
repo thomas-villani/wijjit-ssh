@@ -13,9 +13,9 @@ tests, and packaging.
 - **M3 — robust lifecycle (§7–§10).** Done. Host keys, resource limits,
   per-session logging + metrics hook, and graceful shutdown. `ServerConfig` was
   pulled forward from M4, since M3 introduced the twelve knobs it exists to hold.
-- **M4 — packaging, CI, docs.** In progress. Packaging metadata and CI are
-  landed; the docs site, the second example, and the §12 deployment artifacts
-  are not.
+- **M4 — packaging, CI, docs.** In progress. Packaging metadata, CI, and the
+  Sphinx docs site are landed; the second example and the §12 deployment
+  artifacts are not.
 
 334 tests (338 on POSIX, where four Windows-skipped tests run). §4, §5 and §7–§10
 below now describe the code rather than a plan. The remaining work is the rest of
@@ -105,8 +105,8 @@ wijjit-ssh/
   SPEC.md                     (this file)
   .github/workflows/
     ci.yml                    test matrix / lint / coverage   (§13 M4)      [done]
-    docs.yml                  Sphinx build + Pages deploy     (TODO, M4)
-  docs/                       Sphinx site                     (TODO, M4)
+    docs.yml                  Sphinx build + Pages deploy     (§13 M4)      [done]
+  docs/                       Sphinx site                     (§13 M4)      [done]
   deploy/                     systemd unit, Dockerfile, healthcheck (TODO, §12)
   src/wijjit_ssh/
     __init__.py               public API
@@ -616,14 +616,28 @@ listener. Idempotent under a lock; safe on a server that never started.
     — CI is then byte-for-byte the layout the README documents for local
     development, and collapses to a single checkout the day wijjit publishes.
     **This is the first time the four POSIX-only tests have ever run.**
-  - **Docs & examples. [TODO]** Second example (`dashboard_ssh.py`) and a
-    **Sphinx docs site** — same stack as wijjit (`sphinx-rtd-theme` /
-    `copybutton` / `tabs`, `docs/Makefile`, the Pages workflow), for consistency
-    across the two projects rather than because this repo needs it. The §12
-    deployment material is written alongside the work it describes, not ahead of
-    it: it ships as real artifacts (a systemd unit, a Dockerfile, a scripted
-    healthcheck) that the docs then describe, so the snippets are things that
-    have been run rather than things that were typed.
+  - **Docs site. [DONE]** A Sphinx site under `docs/`, same stack as wijjit
+    (`sphinx-rtd-theme` / `copybutton` / `tabs`, `docs/Makefile` + `make.bat`),
+    for consistency across the two projects. Structure is deliberately lean:
+    index, install + quickstart, six guide pages (auth, host keys, limits,
+    shutdown, logging, terminal input), and an autodoc reference over the eight
+    modules. The reference is nearly free — the module docstrings were already
+    thorough NumPy-style prose, so `napoleon` + `autodoc` render what is there
+    rather than needing new text written. Intersphinx points at CPython,
+    asyncssh, and wijjit's own Pages site, so the `:class:` references those
+    docstrings are dense with become links. Sphinx and its theme sit in their own
+    PEP 735 `docs` group rather than in `dev`, so a contributor running the tests
+    does not install two dozen packages they have no use for.
+    `.github/workflows/docs.yml` builds with `-W` (warnings are errors; the build
+    is clean) on both pushes to main and pull requests, and deploys to Pages only
+    from main — so a docs change that breaks the build reddens the PR rather than
+    the deploy. It reuses ci.yml's two-checkout arrangement, since autodoc has to
+    import `wijjit_ssh`, which imports `wijjit`.
+  - **Examples & deployment. [TODO]** Second example (`dashboard_ssh.py`, auth +
+    multiple views). The §12 deployment material is written alongside the work it
+    describes, not ahead of it: it ships as real artifacts (a systemd unit, a
+    Dockerfile, a scripted healthcheck) that a docs page then describes, so the
+    snippets are things that have been run rather than things that were typed.
 - **M5 — Hardening pass.** Backpressure handling + the §9 byte counters (shared
   `_ChannelWriter` seam), bracketed-paste + mouse edge cases, fuzz the decoder,
   load test (hundreds of concurrent sessions).

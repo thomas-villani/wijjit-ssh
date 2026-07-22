@@ -25,6 +25,9 @@ venv/
 coverage.xml
 htmlcov/
 
+# Sphinx (docs/Makefile and the CI docs job both build into here)
+docs/build/
+
 # SSH host keys (never commit private keys)
 #
 # `host_key*` alone is not enough: gitignore matches on the basename, and the
@@ -35,6 +38,13 @@ htmlcov/
 *.key
 *host_key*
 known_hosts
+
+# ...but `*host_key*` also matches docs/source/guide/host_keys.rst, which is a
+# page *about* host keys rather than one. It silently swallowed that file the
+# first time it was written. Private keys have no extension and their public
+# halves end in `.pub`, so re-including the docs sources costs nothing and keeps
+# the broad pattern that catches `ssh_host_key`.
+!docs/source/**/*.rst
 
 # Editors / OS
 .idea/

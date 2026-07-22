@@ -1,0 +1,96 @@
+name: Docs
+
+# Build the Sphinx site, and publish it to GitHub Pages from main.
+#
+# One-time setup: repository Settings -> Pages -> Source = "GitHub Actions".
+# Without it the deploy job fails; the `github-pages` environment is created
+# automatically on the first successful deploy.
+#
+# Pull requests build but do not deploy, so a docs change that breaks the build
+# is caught on the PR rather than after it lands.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/wijjit_ssh/**"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/wijjit_ssh/**"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+# Let the deploy job publish to Pages via OIDC.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Serialize Pages deployments; don't cancel one that is in flight.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+# The two-checkout arrangement is the same one ci.yml uses and for the same
+# reason: wijjit is not on PyPI, so pyproject.toml resolves it through
+# `[tool.uv.sources] wijjit = { path = "../wijjit" }`, and checking both repos
+# out as siblings reproduces the layout that path expects. autodoc imports
+# wijjit_ssh, which imports wijjit, so the docs build needs it as much as the
+# tests do. See the header of ci.yml for the full note, including what to delete
+# once wijjit publishes.
+
+jobs:
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: wijjit-ssh
+
+      - uses: actions/checkout@v7
+        with:
+          repository: thomas-villani/wijjit
+          path: wijjit
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Sync dependencies
+        # Sphinx and its theme live in their own group, so this is the one job
+        # that asks for them.
+        run: uv sync --python 3.11 --group docs
+        working-directory: wijjit-ssh
+
+      - name: Build Sphinx site
+        # -W turns warnings into errors. The build is warning-clean today, and
+        # the point of the flag is to keep it that way: a broken cross-reference
+        # is a page nobody can navigate, which is a bug, not a note.
+        run: uv run sphinx-build -b html -W --keep-going docs/source docs/build/html
+        working-directory: wijjit-ssh
+
+      - name: Upload Pages artifact
+        # Only main deploys, but always upload: on a PR the artifact is a
+        # downloadable preview of what the change would publish.
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: wijjit-ssh/docs/build/html
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5
