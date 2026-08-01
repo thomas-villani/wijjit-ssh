@@ -45,20 +45,16 @@ Issues = "https://github.com/thomas-villani/wijjit-ssh/issues"
 Changelog = "https://github.com/thomas-villani/wijjit-ssh/blob/main/CHANGELOG.md"
 Wijjit = "https://github.com/thomas-villani/wijjit"
 
-[tool.uv.sources]
-# wijjit is not published yet, so uv cannot resolve `wijjit>=0.1.0` from PyPI
-# and every `uv run` would fail. Point it at the sibling checkout instead.
+# No [tool.uv.sources] here, deliberately. wijjit resolved from a sibling
+# checkout until it reached PyPI; that section is gone as of 0.1.0, so
+# `wijjit>=0.1.0` above is now resolved from the real index by every `uv sync`,
+# by CI, and by anyone installing this package. release.yml still checks the
+# section has not come back - see RELEASING.md for why that check exists.
 #
-# Editable, and deliberately a path rather than a git ref: the two libraries are
-# developed in tandem, so wijjit-ssh's tests should run against the working tree
-# next door. A git source would test against whatever was last pushed, and make
-# every wijjit change need a commit before this repo could see it.
-#
-# Assumes the layout the README documents (wijjit and wijjit-ssh side by side).
-# Delete this section once wijjit is on PyPI - the dependency pin already says
-# what it needs. uv strips [tool.uv.sources] from published metadata, so this
-# never reaches anyone installing the package.
-wijjit = { path = "../wijjit", editable = true }
+# To develop the two libraries in tandem again, do it locally and do not commit
+# it: `uv add --editable ../wijjit` (undo with `uv remove wijjit && uv add
+# 'wijjit>=0.1.0'`), or `uv sync` then `uv pip install -e ../wijjit`, which
+# leaves pyproject.toml untouched entirely.
 
 [dependency-groups]
 dev = [

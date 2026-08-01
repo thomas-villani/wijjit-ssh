@@ -29,13 +29,8 @@ RUN uv venv /opt/venv
 # Dependencies in their own layer, ahead of the application source, so editing
 # the app does not re-resolve the world.
 #
-# BEFORE wijjit IS ON PyPI this line cannot work - `wijjit>=0.1.0` will not
-# resolve. Until then, build with both repositories as siblings and the parent
-# directory as the build context:
-#     COPY wijjit /src/wijjit
-#     COPY wijjit-ssh /src/wijjit-ssh
-#     RUN uv pip install /src/wijjit /src/wijjit-ssh
-# See RELEASING.md.
+# Pin the version in a real deployment (`wijjit-ssh==0.1.0`): an unpinned install
+# means the image you rebuild in six months is not the image you tested.
 RUN uv pip install --no-cache wijjit-ssh
 
 # A non-root user. This process terminates untrusted connections; there is no

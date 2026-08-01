@@ -20,10 +20,12 @@ name: Release
 # once before the first real tag: a name is claimed on first upload and a bad
 # 0.1.0 cannot be replaced, only yanked.
 #
-# Unlike ci.yml and docs.yml this checks out ONE repository. Those two need the
-# sibling `../wijjit` checkout because they import the package; a build does not.
-# `uv build` runs hatchling in an isolated environment with only the
-# `[build-system] requires`, and never resolves `[project] dependencies` at all.
+# One checkout, like ci.yml and docs.yml since 0.1.0 - all three were on a
+# two-checkout arrangement while wijjit resolved from `../wijjit`. Note that a
+# build would not have needed it regardless: `uv build` runs hatchling in an
+# isolated environment with only the `[build-system] requires`, and never
+# resolves `[project] dependencies` at all. The `verify` job below is the part
+# that does resolve them, and deliberately so.
 
 on:
   push:
@@ -185,11 +187,25 @@ jobs:
       - name: Extract this version's changelog section
         run: |
           version="${GITHUB_REF_NAME#v}"
+
+          # index(...) == 1 rather than a regex match, deliberately. The obvious
+          # `$0 ~ "^## \\[" ver "\\]"` does not work: awk parses the string
+          # literal first, so `\\[` becomes a bare `[` in the string, and the
+          # regex compiler then reads `[0.1.0]` as a CHARACTER CLASS. The pattern
+          # silently matches nothing, and since this is the last job in the
+          # pipeline the only symptom is a published release with empty notes.
+          # A prefix test sidesteps regex escaping entirely.
           awk -v ver="$version" '
-            $0 ~ "^## \\[" ver "\\]" { found = 1; next }
-            found && /^## \[/        { exit }
-            found                    { print }
+            index($0, "## [" ver "]") == 1 { found = 1; next }
+            found && /^## \[/              { exit }
+            found                          { print }
           ' CHANGELOG.md > RELEASE_NOTES.md
+
+          # Fail loudly rather than publishing an empty release page.
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::error file=CHANGELOG.md::Extracted no release notes for $version."
+            exit 1
+          fi
           cat RELEASE_NOTES.md
 
       - name: Create release

@@ -16,35 +16,38 @@ platform difference worth knowing is signal handling: Windows never delivers
 Installing
 ----------
 
-.. note::
+.. code-block:: bash
 
-   Wijjit is not on PyPI yet, so ``wijjit-ssh`` cannot be installed from PyPI
-   either - its dependency would not resolve. Until that changes, install from
-   source with the two repositories checked out side by side.
+   pip install wijjit-ssh
 
-Clone the two repositories as siblings::
-
-   PycharmProjects/
-     wijjit/        # github.com/thomas-villani/wijjit
-     wijjit-ssh/    # github.com/thomas-villani/wijjit-ssh
-
-``pyproject.toml`` points ``uv`` at that layout via ``[tool.uv.sources]``, so a
-plain sync is all it takes:
+Or with ``uv``:
 
 .. code-block:: bash
 
-   git clone https://github.com/thomas-villani/wijjit.git
+   uv add wijjit-ssh
+
+Wijjit and asyncssh come along as dependencies.
+
+From source
+^^^^^^^^^^^
+
+.. code-block:: bash
+
    git clone https://github.com/thomas-villani/wijjit-ssh.git
    cd wijjit-ssh
-   uv sync                       # installs wijjit editable from ../wijjit
+   uv sync
 
-The source is deliberately **a path and editable, not a git ref**: the two
-libraries are developed in tandem, so a change in ``../wijjit`` is picked up here
-with no reinstall. A git source would test against whatever was last pushed.
+Everything in this project runs through ``uv``. There is no ``pip install -e .``
+path, because the development dependencies are PEP 735 ``[dependency-groups]``,
+which pip cannot see at all.
 
-Once Wijjit publishes, that section goes away and ``pip install wijjit-ssh``
-works like anything else. (``uv`` strips ``[tool.uv.sources]`` from published
-metadata, so it never affects anyone installing the package.)
+To work against an unreleased Wijjit, install it over the top rather than adding
+a ``[tool.uv.sources]`` section - the release workflow refuses to build while one
+is present:
+
+.. code-block:: bash
+
+   uv sync && uv pip install -e ../wijjit
 
 Verifying the install
 ---------------------
@@ -73,8 +76,8 @@ build:
    uv run mypy src/
 
 Four tests are POSIX-only - three ``0600`` host-key mode-bit assertions and the
-end-to-end ``SIGTERM`` drain - so Windows reports ``334 passed, 4 skipped``
-where Linux and macOS report ``338 passed``.
+end-to-end ``SIGTERM`` drain - so Windows reports ``338 passed, 4 skipped``
+where Linux and macOS report ``342 passed``.
 
 Building these docs
 -------------------

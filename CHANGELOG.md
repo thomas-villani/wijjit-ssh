@@ -7,11 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing released yet. `wijjit-ssh` is at `0.0.1` and cannot publish until
-[`wijjit`](https://github.com/thomas-villani/wijjit) 0.1.0 is on PyPI, since
-`pyproject.toml` still resolves it from a sibling checkout. The work below is the
-history from the original prototype to a deployable server, by milestone
-(see [`SPEC.md`](https://github.com/thomas-villani/wijjit-ssh/blob/main/SPEC.md)).
+Nothing yet.
+
+## [0.1.0] - 2026-08-01
+
+First release. `wijjit-ssh` serves [Wijjit](https://github.com/thomas-villani/wijjit)
+TUI apps over SSH — you write a factory that builds an app per connection, and
+clients `ssh` straight into it. The work below is the history from the original
+prototype to a deployable server, by milestone (see
+[`SPEC.md`](https://github.com/thomas-villani/wijjit-ssh/blob/main/SPEC.md)).
+
+Publishing was blocked on `wijjit` itself reaching PyPI, since `pyproject.toml`
+resolved it from a sibling checkout. `wijjit` 0.1.0 is now published, so
+`[tool.uv.sources]` is gone and `wijjit>=0.1.0` resolves from the real index —
+the precondition `release.yml` refuses to build without.
+
+**Known gap, by design:** there is no backpressure handling yet. A client that
+stops reading buffers frames in asyncssh without bound. It is the headline item
+in `SPEC.md`'s M5 and is documented in the README, the docs, and `SECURITY.md`.
 
 ### Added
 
@@ -105,6 +118,39 @@ history from the original prototype to a deployable server, by milestone
 
 ### Fixed
 
+- **Naming `OpenAuth` explicitly bypassed the fail-closed construction check.**
+  The gate sat on the `auth is None` branch, so `WijjitSSH(make_app,
+  auth=OpenAuth())` built and served an unauthenticated server with only a log
+  warning — no `allow_anonymous=True` required. Passing *no* policy raised, so
+  the one spelling that got through was the one that looked more deliberate, and
+  it is the spelling a reader copying from the auth guide would reach for. The
+  check is on the outcome now (`auth.auth_required("")`), which also catches an
+  `OpenAuth` buried inside a `ChainAuth`, since a chain waives authentication
+  whenever any member does. `auth.py`, the authentication guide, and `SECURITY.md`
+  had all documented the behaviour this now implements.
+- **A `Wijjit` internal rename would have failed every session.** The check that
+  the factory wired the session backend into the app reads `app._backend`, a
+  private attribute with no public accessor upstream. Read directly, a rename in
+  a future wijjit would raise `AttributeError` inside the factory's `try`, and
+  every client would be told "Failed to start application". It goes through
+  `getattr` with a sentinel now, so the sanity check degrades to silence instead
+  of to an outage. The dependency pin is `wijjit>=0.1.0` with no upper bound,
+  which is what makes this reachable.
+- **The release workflow would have published empty release notes.** The awk that
+  lifts this file's section for the GitHub release used
+  `$0 ~ "^## \\[" ver "\\]"`. awk parses the string literal before compiling the
+  regex, so `\\[` arrives as a bare `[` and the pattern becomes the character
+  class `[0.1.0]` — it matched nothing, silently. The `verify` job would not have
+  caught it, because that check uses `grep`, where `\[` behaves. Rewritten as an
+  `index(...) == 1` prefix test, which has no escaping question at all, plus a
+  guard that fails the job rather than publishing an empty announcement.
+- **The `on_event` table under-reported what it emits.** `session.ended` carries
+  `username` and `peer_ip` as well, and `session.rejected` carries `username`
+  only when the refusal came after authentication — so a hook that subscripted
+  the payload would `KeyError` on a no-pty refusal. Documented, along with the
+  fact that `session.ended` fires for sessions that never emitted
+  `session.started` (a no-pty refusal, or an app factory that raised), which any
+  hook pairing the two events has to tolerate.
 - **The sdist quietly included three files from `docs/`.** Hatchling matches
   `[tool.hatch.build.targets.sdist]` include patterns gitignore-style, so the
   bare entry `examples` matched a directory of that name at *any* depth and
@@ -152,4 +198,5 @@ history from the original prototype to a deployable server, by milestone
 - **A raising `app_factory` dropped the connection silently.** It now reports to the
   client and logs.
 
-[Unreleased]: https://github.com/thomas-villani/wijjit-ssh/commits/main
+[Unreleased]: https://github.com/thomas-villani/wijjit-ssh/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/thomas-villani/wijjit-ssh/releases/tag/v0.1.0

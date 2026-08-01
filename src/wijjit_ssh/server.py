@@ -326,7 +326,14 @@ class _WijjitSSHSession(asyncssh.SSHServerSession[bytes]):
         # clue why. Log it server-side and tell the client something actionable.
         try:
             app = self._app_factory(session)
-            if app._backend is not self._backend:
+            # Wijjit exposes no public accessor for the backend it was built
+            # with, so this reads a private attribute - deliberately through
+            # getattr with a sentinel. If a future Wijjit renames it, the check
+            # goes quiet; reading `app._backend` directly would instead raise
+            # AttributeError here and turn a lost sanity check into every
+            # session failing with "Failed to start application".
+            attached = getattr(app, "_backend", self._backend)
+            if attached is not self._backend:
                 raise RuntimeError(
                     "The app factory must pass the session backend to the app: "
                     "Wijjit(backend=session.backend)."
@@ -807,10 +814,13 @@ class WijjitSSH:
     Raises
     ------
     ValueError
-        If no ``auth`` policy is given and ``allow_anonymous`` is not True.
-        Serving an unauthenticated SSH server is a decision that has to be typed
-        out, not one you inherit by forgetting an argument - so the default
-        fails closed rather than silently accepting every client on the internet.
+        If the server would run unauthenticated and ``allow_anonymous`` is not
+        True - whether that is because no ``auth`` policy was given, or because
+        the one given waives authentication (:class:`~wijjit_ssh.auth.OpenAuth`,
+        or a :class:`~wijjit_ssh.auth.ChainAuth` containing one). Serving an
+        unauthenticated SSH server is a decision that has to be typed out, not
+        one you inherit by forgetting an argument - so the default fails closed
+        rather than silently accepting every client on the internet.
         Also raised for an out-of-range config value, or an unreadable host key.
     TypeError
         If an override is not a config field.
@@ -852,6 +862,24 @@ class WijjitSSH:
                     "be used on an untrusted network."
                 )
             auth = OpenAuth()
+
+        # The gate is on the *outcome*, not on whether `auth=` was passed. A
+        # policy that waives authentication serves exactly the server that
+        # omitting the policy would have - so `auth=OpenAuth()` has to clear the
+        # same bar as no policy at all, and so does an OpenAuth buried in a
+        # ChainAuth (whose auth_required is the `all()` of its members). Gating
+        # only the `auth is None` branch made the documented fail-closed
+        # guarantee bypassable by naming the policy explicitly, which is the one
+        # spelling a reader would assume was the *more* deliberate of the two.
+        if not auth.auth_required("") and not self.config.allow_anonymous:
+            raise ValueError(
+                f"{type(auth).__name__} requires no authentication, so this "
+                "server would let anyone connect as any username. If that is "
+                "what you want, pass allow_anonymous=True as well - it must "
+                "never be used on an untrusted network. Otherwise pass a policy "
+                "that authenticates (wijjit_ssh.auth: AuthorizedKeys, "
+                "PasswordAuth, ChainAuth)."
+            )
 
         if not auth.auth_required(""):
             logger.warning(

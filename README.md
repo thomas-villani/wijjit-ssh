@@ -16,6 +16,10 @@ PTY, and every connection gets its own live app instance.
 > (async byte decoder, no threads), auth is pluggable and fail-closed, and
 > resources are bounded by default. See "Not yet hardened" below for what's left.
 
+```bash
+pip install wijjit-ssh     # or: uv add wijjit-ssh
+```
+
 ```python
 from wijjit import Wijjit, render_template_string
 from wijjit_ssh import WijjitSSH, SSHSession, AuthorizedKeys, ensure_host_key
@@ -65,10 +69,12 @@ process without stepping on each other - each runs as its own asyncio task.
 
 ## Authentication
 
-Auth is **fail-closed**: `WijjitSSH` raises unless you either pass an `auth`
-policy or explicitly pass `allow_anonymous=True`. Serving an unauthenticated SSH
-server should be something you typed, not something you inherited by forgetting
-an argument.
+Auth is **fail-closed**: `WijjitSSH` raises unless you pass an `auth` policy
+that actually authenticates, or explicitly pass `allow_anonymous=True`. The gate
+is on the outcome rather than on the argument, so `auth=OpenAuth()` needs
+`allow_anonymous=True` too — naming the open policy is not a way around it.
+Serving an unauthenticated SSH server should be something you typed, not
+something you inherited by forgetting an argument.
 
 ```python
 from wijjit_ssh.auth import AuthorizedKeys, PasswordAuth, ChainAuth, check_password
@@ -305,18 +311,11 @@ remaining milestones.
 
 ## Development
 
-Wijjit is not on PyPI yet, so `pyproject.toml` points `uv` at a sibling checkout
-via `[tool.uv.sources]`. Clone the two repos side by side:
-
-```
-PycharmProjects/
-  wijjit/        # github.com/thomas-villani/wijjit
-  wijjit-ssh/    # this repo
-```
-
 ```bash
-uv sync                            # installs wijjit editable from ../wijjit
-uv run pytest -q                   # 334 passed, 4 skipped
+git clone https://github.com/thomas-villani/wijjit-ssh.git
+cd wijjit-ssh
+uv sync                            # wijjit comes from PyPI
+uv run pytest -q                   # 338 passed, 4 skipped
 uv run ruff check src/ tests/ examples/
 uv run black --check src/ tests/ examples/
 uv run mypy src/
@@ -338,17 +337,19 @@ and nobody running the tests should have to build a C extension for it.
 point of the flag.
 
 The four skips are all POSIX-only - three `0600` host-key mode-bit assertions and
-the end-to-end SIGTERM drain - so on Linux and macOS the suite reports 338 passed.
+the end-to-end SIGTERM drain - so on Linux and macOS the suite reports 342 passed.
 CI covers Python 3.11-3.13 on Linux, macOS, and Windows.
 
-The source is **editable and a path, not a git ref**, on purpose: the two
-libraries are developed in tandem, so changes to `../wijjit` are picked up here
-immediately with no reinstall. A git source would test against whatever was last
-pushed instead.
+### Working against an unreleased Wijjit
 
-Once `wijjit` is published, delete the `[tool.uv.sources]` section - the
-dependency pin already says what it needs. (`uv` strips that section from
-published metadata, so it never affects anyone installing the package.)
+`wijjit` is an ordinary PyPI dependency as of 0.1.0. To develop the two libraries
+in tandem again, point at a local checkout **without committing the change** —
+`release.yml` refuses to build while `[tool.uv.sources]` is in `pyproject.toml`,
+because a path source means the PyPI pin has never actually been resolved:
+
+```bash
+uv sync && uv pip install -e ../wijjit    # leaves pyproject.toml alone
+```
 
 [`CONTRIBUTING.md`](https://github.com/thomas-villani/wijjit-ssh/blob/main/CONTRIBUTING.md)
 has the rest: style rules, what the tests are expected to look like, the commit
