@@ -100,8 +100,8 @@ An auth policy
 --------------
 
 Authentication is **fail-closed**: :class:`~wijjit_ssh.server.WijjitSSH` raises
-unless you either pass an ``auth`` policy or explicitly pass
-``allow_anonymous=True``.
+unless you pass an ``auth`` policy that actually authenticates, or explicitly
+pass ``allow_anonymous=True``.
 
 .. code-block:: python
 

@@ -13,14 +13,16 @@ tests, and packaging.
 - **M3 — robust lifecycle (§7–§10).** Done. Host keys, resource limits,
   per-session logging + metrics hook, and graceful shutdown. `ServerConfig` was
   pulled forward from M4, since M3 introduced the twelve knobs it exists to hold.
-- **M4 — packaging, CI, docs.** In progress. Packaging metadata, CI, the Sphinx
-  docs site, and the first two examples are landed; the remaining two examples
-  and the §12 deployment artifacts are not.
+- **M4 — packaging, CI, docs.** Done, and **released as 0.1.0**. Packaging
+  metadata, CI, the Sphinx docs site, the §12 deployment artifacts, the release
+  pipeline, and the first two examples are all landed. The two remaining examples
+  (`ide_ssh.py`, `store_ssh.py`) slipped to post-release; they are additions to
+  the docs, not to the package.
 
-334 tests (338 on POSIX, where four Windows-skipped tests run). §4, §5 and §7–§10
-below now describe the code rather than a plan. The remaining work is the rest of
-**M4** and all of **M5 (hardening)** — the big remaining gap is **backpressure
-(§8)**: a client that stops reading still buffers frames in asyncssh without bound.
+338 tests (342 on POSIX, where four Windows-skipped tests run). §4, §5 and §7–§10
+below now describe the code rather than a plan. The remaining work is **M5
+(hardening)** — the big remaining gap is **backpressure (§8)**: a client that
+stops reading still buffers frames in asyncssh without bound.
 
 It is deliberately concrete — interface signatures, file layout, and phased
 milestones — so it can be read top-to-bottom to understand the whole design,
@@ -260,9 +262,18 @@ asyncssh's `authorized_client_keys` on `create_server`), etc.
 The `username` is surfaced to the app via `SSHSession.username` (already wired),
 so apps can personalize/authorize per user.
 
-**Default posture:** constructing `WijjitSSH(...)` **without** an `auth=`
-argument raises unless `allow_anonymous=True` is passed — fail-closed, so no one
-accidentally ships `OpenAuth`.
+**Default posture:** constructing `WijjitSSH(...)` raises unless the resolved
+policy actually authenticates, or `allow_anonymous=True` is passed — fail-closed,
+so no one accidentally ships `OpenAuth`.
+
+> The gate is on the **outcome**, not on whether `auth=` was passed. Written the
+> obvious way — guarding only the `auth is None` branch — `auth=OpenAuth()` sailed
+> through with a log warning, which meant the one spelling that defeated the check
+> was the one that looked *more* deliberate than the one it caught. Testing
+> `auth.auth_required("")` also covers an `OpenAuth` inside a `ChainAuth`, whose
+> own `auth_required` is the `all()` of its members. Fixed in 0.1.0; it had been
+> wrong since M2 and documented correctly the whole time, in `auth.py`, the
+> authentication guide, and `SECURITY.md`.
 
 ---
 
@@ -720,12 +731,31 @@ the work turned up that this list did not anticipate.
     number to be reused once that is discovered. `RELEASING.md`, `CONTRIBUTING.md`,
     and `SECURITY.md` cover the procedure, the conventions, and the trust
     boundary respectively.
+  - **Release. [DONE — 0.1.0.]** `wijjit` 0.1.0 reached PyPI, which unblocked the
+    three preconditions `RELEASING.md` had been carrying: the path source is
+    gone, `uv.lock` resolves `wijjit>=0.1.0` from the real index, and `ci.yml` /
+    `docs.yml` are ordinary single-checkout workflows with `uv sync --locked`.
+    The suite was run against the *published* wijjit before tagging, not the
+    sibling working tree — which is the whole point of the `verify` job, done
+    once by hand first.
+
+    The review that went with it turned up one thing worth recording: the
+    fail-closed auth check was **bypassable by naming `OpenAuth` explicitly**
+    (§5). It had been that way since M2 while `auth.py`, the authentication
+    guide, and `SECURITY.md` all documented the behaviour it did not have. The
+    lesson is narrower than "test your security checks": the check *was* tested,
+    by `test_server_refuses_to_run_without_an_auth_policy`, which asserted the
+    error for the argument that was missing rather than for the server that
+    would result. A test written against the guarantee instead of against the
+    branch would have caught it.
 - **M5 — Hardening pass.** Backpressure handling + the §9 byte counters (shared
   `_ChannelWriter` seam), bracketed-paste + mouse edge cases, fuzz the decoder,
-  load test (hundreds of concurrent sessions).
+  load test (hundreds of concurrent sessions). Now the first post-release
+  milestone, so it is also where the M3 open questions below get measured
+  answers rather than guesses.
 
 Each milestone is independently shippable; M1 alone made the prototype
-production-shaped on the hot path, and M3 makes it deployable.
+production-shaped on the hot path, M3 makes it deployable, and M4 shipped it.
 
 ---
 

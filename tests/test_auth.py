@@ -270,6 +270,19 @@ def test_server_allows_anonymous_when_asked_explicitly() -> None:
     WijjitSSH(make_app, host_keys=[], allow_anonymous=True)
 
 
+def test_server_refuses_an_open_policy_passed_explicitly() -> None:
+    """The gate is on the outcome, not on whether `auth=` was passed."""
+    with pytest.raises(ValueError, match="requires no authentication"):
+        WijjitSSH(make_app, host_keys=[], auth=OpenAuth())
+
+
+def test_server_refuses_an_open_auth_hidden_in_a_chain() -> None:
+    """ChainAuth waives auth if any member does, so the chain has to be caught too."""
+    chain = ChainAuth(PasswordAuth(lambda user, pw: False), OpenAuth())
+    with pytest.raises(ValueError, match="requires no authentication"):
+        WijjitSSH(make_app, host_keys=[], auth=chain)
+
+
 # ---------------------------------------------------------------------------
 # Over real SSH
 # ---------------------------------------------------------------------------

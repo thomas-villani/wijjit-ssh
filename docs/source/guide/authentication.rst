@@ -2,8 +2,8 @@ Authentication
 ==============
 
 Authentication is **fail-closed**. :class:`~wijjit_ssh.server.WijjitSSH` raises
-at construction unless you either pass an ``auth`` policy or explicitly pass
-``allow_anonymous=True``:
+at construction unless you pass an ``auth`` policy that actually authenticates,
+or explicitly pass ``allow_anonymous=True``:
 
 .. code-block:: python
 
@@ -12,6 +12,20 @@ at construction unless you either pass an ``auth`` policy or explicitly pass
 
 Serving an unauthenticated SSH server should be something you typed, not
 something you inherited by forgetting an argument.
+
+The check is on the **outcome**, not on whether ``auth=`` was passed. A policy
+that waives authentication serves exactly the server that omitting the policy
+would have, so it has to clear the same bar:
+
+.. code-block:: python
+
+   >>> WijjitSSH(make_app, host_keys=host_keys, auth=OpenAuth())
+   ValueError: OpenAuth requires no authentication, so this server would let
+   anyone connect as any username. ...
+
+That covers an :class:`~wijjit_ssh.auth.OpenAuth` buried inside a
+:class:`~wijjit_ssh.auth.ChainAuth` as well, since a chain waives authentication
+whenever any of its members does.
 
 ``asyncssh`` drives authentication through a handful of callbacks on its
 :class:`~asyncssh.SSHServer` object. Wiring credentials straight into those

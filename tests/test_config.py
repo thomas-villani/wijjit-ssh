@@ -12,7 +12,7 @@ import asyncssh
 import pytest
 
 from wijjit_ssh import ServerConfig, WijjitSSH
-from wijjit_ssh.auth import OpenAuth
+from wijjit_ssh.auth import AuthorizedKeys, OpenAuth
 
 
 def _app_factory(session):  # never called; these tests do not start a server
@@ -154,8 +154,30 @@ def test_server_still_fails_closed_without_auth(host_key) -> None:
 
 
 def test_server_accepts_auth_through_a_config_object(host_key) -> None:
-    config = ServerConfig(host_keys=[host_key], auth=OpenAuth())
+    # A policy that actually authenticates, deliberately: OpenAuth would clear
+    # this assertion while testing the anonymous path instead of the config one.
+    config = ServerConfig(host_keys=[host_key], auth=AuthorizedKeys(keys=[]))
     assert WijjitSSH(_app_factory, config).config.auth is not None
+
+
+def test_naming_open_auth_does_not_dodge_the_fail_closed_check(host_key) -> None:
+    """`auth=OpenAuth()` must clear the same bar as passing no policy at all.
+
+    The gate used to sit on the `auth is None` branch, so spelling the open
+    policy out - the *more* deliberate-looking of the two - was the one way
+    around it.
+    """
+    with pytest.raises(ValueError, match="requires no authentication"):
+        WijjitSSH(_app_factory, host_keys=[host_key], auth=OpenAuth())
+    with pytest.raises(ValueError, match="requires no authentication"):
+        WijjitSSH(_app_factory, ServerConfig(host_keys=[host_key], auth=OpenAuth()))
+
+
+def test_open_auth_is_allowed_when_anonymous_is_asked_for(host_key) -> None:
+    server = WijjitSSH(
+        _app_factory, host_keys=[host_key], auth=OpenAuth(), allow_anonymous=True
+    )
+    assert server.config.auth is not None
 
 
 def test_server_defaults_are_the_config_defaults(host_key) -> None:

@@ -280,18 +280,31 @@ class EventEmitter:
     Lets a deployment wire up Prometheus (or anything else) without this package
     taking a dependency on a metrics library. Events emitted:
 
-    ==========================  ============================================
+    ==========================  ==================================================
     Event                       Fields
-    ==========================  ============================================
+    ==========================  ==================================================
     ``connection.opened``       ``peer_ip``
     ``connection.rejected``     ``peer_ip``, ``reason``
     ``connection.closed``       ``peer_ip``
     ``auth.ok``                 ``username``, ``peer_ip``, ``method``
     ``auth.failed``             ``username``, ``peer_ip``, ``method``
     ``session.started``         ``session_id``, ``username``, ``peer_ip``
-    ``session.rejected``        ``peer_ip``, ``reason``
-    ``session.ended``           ``session_id``, ``reason``, ``duration``
-    ==========================  ============================================
+    ``session.rejected``        ``peer_ip``, ``reason``, and ``username`` when the
+                                refusal came after authentication
+    ``session.ended``           ``session_id``, ``username``, ``peer_ip``,
+                                ``reason``, ``duration``
+    ==========================  ==================================================
+
+    ``session.rejected`` is emitted from two places and they do not carry the
+    same fields: a session refused by ``max_sessions`` has authenticated, so it
+    has a ``username``, while one refused for requesting no pty is reported
+    without one. Read the payload with ``fields.get(...)`` rather than
+    subscripting it.
+
+    Note that ``session.ended`` fires for a session that never emitted
+    ``session.started`` - a no-pty refusal, or an app factory that raised. A hook
+    that pairs the two events (a gauge, a subscriber registry) has to tolerate
+    an ``ended`` it never saw a ``started`` for.
 
     Parameters
     ----------
