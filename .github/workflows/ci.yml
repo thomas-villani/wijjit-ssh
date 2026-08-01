@@ -6,23 +6,20 @@ on:
   pull_request:
     branches: [main]
 
-# Why every job checks out two repositories
-# -----------------------------------------
-# `wijjit` is not on PyPI yet, so `pyproject.toml` resolves it through
-# `[tool.uv.sources] wijjit = { path = "../wijjit", editable = true }`. Checking
-# both repos out as siblings under $GITHUB_WORKSPACE reproduces exactly the layout
-# README.md documents for local development, so that path source resolves on a
-# runner with no CI-only dependency override and no change to pyproject.toml.
+# An ordinary single-checkout workflow as of 0.1.0.
 #
-# Tracking wijjit `main` rather than a tag is deliberate: the two libraries are
-# developed in tandem, so a wijjit change that breaks the TerminalBackend /
-# InputSource seam should redden this repo's CI the day it lands. That is the same
-# reason the local source is a path and not a git ref.
+# Until wijjit reached PyPI, every job here checked out *two* repositories as
+# siblings, because pyproject.toml resolved wijjit through
+# `[tool.uv.sources] wijjit = { path = "../wijjit" }` and a runner had no sibling
+# to point at. That is gone: wijjit is an ordinary PyPI dependency now, so the
+# second checkout, the `path:` on the first, and the `working-directory:` on
+# every `run:` all went with it.
 #
-# ONCE WIJJIT PUBLISHES: delete the second checkout step in each job, drop
-# `path: wijjit-ssh` from the first, and remove `working-directory: wijjit-ssh`
-# from every `run:`. That collapses this to an ordinary single-checkout workflow.
-# See the removal note on [tool.uv.sources] in pyproject.toml.
+# The tradeoff that removal makes, worth naming: CI used to track wijjit `main`,
+# so a wijjit change that broke the TerminalBackend / InputSource seam reddened
+# this repo the day it landed. Now it is caught when the pin moves instead. If
+# that gap matters, the fix is a separate scheduled job that installs wijjit from
+# git, not a return to the two-checkout arrangement here.
 
 jobs:
   test:
@@ -36,53 +33,36 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-        with:
-          path: wijjit-ssh
-
-      - uses: actions/checkout@v7
-        with:
-          repository: thomas-villani/wijjit
-          path: wijjit
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
       - name: Sync dependencies
-        # Plain `uv sync`, not `--locked`: the wijjit path source means uv.lock
-        # legitimately moves whenever the sibling checkout's own dependencies do,
-        # and `--locked` would fail CI over a change that isn't ours. Worth
-        # tightening once wijjit is an ordinary PyPI pin.
+        # `--locked` now that wijjit is an ordinary registry pin: uv.lock no
+        # longer moves whenever a sibling checkout's own dependencies do, so a
+        # lockfile that disagrees with pyproject.toml is a real error and should
+        # fail rather than be silently resolved around.
         #
         # uv fetches the interpreter itself, so there is no actions/setup-python step.
-        run: uv sync --python ${{ matrix.python-version }}
-        working-directory: wijjit-ssh
+        run: uv sync --locked --python ${{ matrix.python-version }}
 
       - name: Run tests
         # Four tests are POSIX-only (the 0600 host-key mode bits, the permission
         # warning, and the end-to-end SIGTERM drain) and skip on Windows. The
         # ubuntu and macOS legs are the only place they run at all.
         run: uv run pytest -q --tb=short
-        working-directory: wijjit-ssh
 
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          path: wijjit-ssh
-
-      - uses: actions/checkout@v7
-        with:
-          repository: thomas-villani/wijjit
-          path: wijjit
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
       - name: Sync dependencies
-        run: uv sync --python 3.11
-        working-directory: wijjit-ssh
+        run: uv sync --locked --python 3.11
 
       # tests/, examples/, and deploy/ are linted alongside src/, unlike the
       # wijjit repo's own workflow. They are already clean, so there is no reason
@@ -90,35 +70,24 @@ jobs:
       # script people copy into a Dockerfile, so it should hold the same bar.
       - name: ruff
         run: uv run ruff check src/ tests/ examples/ deploy/
-        working-directory: wijjit-ssh
 
       - name: black
         run: uv run black --check src/ tests/ examples/ deploy/
-        working-directory: wijjit-ssh
 
       - name: mypy
         run: uv run mypy src/ deploy/
-        working-directory: wijjit-ssh
 
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          path: wijjit-ssh
-
-      - uses: actions/checkout@v7
-        with:
-          repository: thomas-villani/wijjit
-          path: wijjit
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
       - name: Sync dependencies
-        run: uv sync --python 3.11
-        working-directory: wijjit-ssh
+        run: uv sync --locked --python 3.11
 
       - name: Run tests with coverage
         run: >
@@ -127,10 +96,9 @@ jobs:
           --cov-report=xml
           --cov-report=term-missing
           -q
-        working-directory: wijjit-ssh
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
         with:
-          files: ./wijjit-ssh/coverage.xml
+          files: ./coverage.xml
           fail_ci_if_error: false

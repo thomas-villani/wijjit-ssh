@@ -37,13 +37,10 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
-# The two-checkout arrangement is the same one ci.yml uses and for the same
-# reason: wijjit is not on PyPI, so pyproject.toml resolves it through
-# `[tool.uv.sources] wijjit = { path = "../wijjit" }`, and checking both repos
-# out as siblings reproduces the layout that path expects. autodoc imports
-# wijjit_ssh, which imports wijjit, so the docs build needs it as much as the
-# tests do. See the header of ci.yml for the full note, including what to delete
-# once wijjit publishes.
+# Single checkout as of 0.1.0, same as ci.yml. This used to check out wijjit as
+# a sibling too, because pyproject.toml resolved it from a path and autodoc has
+# to import wijjit_ssh, which imports wijjit. wijjit is on PyPI now, so `uv sync`
+# is enough. See the header of ci.yml.
 
 jobs:
   build:
@@ -51,13 +48,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          path: wijjit-ssh
-
-      - uses: actions/checkout@v7
-        with:
-          repository: thomas-villani/wijjit
-          path: wijjit
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -65,22 +55,20 @@ jobs:
       - name: Sync dependencies
         # Sphinx and its theme live in their own group, so this is the one job
         # that asks for them.
-        run: uv sync --python 3.11 --group docs
-        working-directory: wijjit-ssh
+        run: uv sync --locked --python 3.11 --group docs
 
       - name: Build Sphinx site
         # -W turns warnings into errors. The build is warning-clean today, and
         # the point of the flag is to keep it that way: a broken cross-reference
         # is a page nobody can navigate, which is a bug, not a note.
         run: uv run sphinx-build -b html -W --keep-going docs/source docs/build/html
-        working-directory: wijjit-ssh
 
       - name: Upload Pages artifact
         # Only main deploys, but always upload: on a PR the artifact is a
         # downloadable preview of what the change would publish.
         uses: actions/upload-pages-artifact@v5
         with:
-          path: wijjit-ssh/docs/build/html
+          path: docs/build/html
 
   deploy:
     name: Deploy to GitHub Pages

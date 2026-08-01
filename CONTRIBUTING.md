@@ -7,29 +7,27 @@ is already in there, already deliberately excluded, or already scheduled.
 
 ## Setting up
 
-`wijjit` is not on PyPI yet, so `pyproject.toml` resolves it from a sibling
-checkout via `[tool.uv.sources]`. Clone both repositories side by side:
-
-```
-PycharmProjects/
-  wijjit/        # github.com/thomas-villani/wijjit
-  wijjit-ssh/    # this repo
-```
-
 ```bash
-git clone https://github.com/thomas-villani/wijjit.git
 git clone https://github.com/thomas-villani/wijjit-ssh.git
 cd wijjit-ssh
-uv sync                            # installs wijjit editable from ../wijjit
+uv sync
 ```
-
-The source is a **path, and editable, on purpose**: the two libraries are
-developed in tandem, so a change in `../wijjit` is picked up here with no
-reinstall. A git ref would test against whatever was last pushed. That section
-goes away once `wijjit` publishes — see [`RELEASING.md`](https://github.com/thomas-villani/wijjit-ssh/blob/main/RELEASING.md).
 
 Everything runs through `uv`. There is no `pip install -e .` path, because dev
 dependencies here are PEP 735 `[dependency-groups]`, which pip cannot see.
+
+`wijjit` is an ordinary PyPI dependency. If you need to work against an
+unreleased Wijjit, install it over the top rather than editing `pyproject.toml`:
+
+```bash
+uv sync && uv pip install -e ../wijjit
+```
+
+Do not commit a `[tool.uv.sources]` section for it. `release.yml` refuses to
+build while one exists, and the reason is worth knowing: a path source means
+`wijjit>=0.1.0` has not actually been resolved from the index by anything, and a
+version number cannot be re-uploaded to PyPI once that turns out to be wrong. See
+[`RELEASING.md`](https://github.com/thomas-villani/wijjit-ssh/blob/main/RELEASING.md).
 
 ## The checks
 
@@ -37,14 +35,14 @@ These are exactly the commands CI runs, so a clean local run means a green
 build:
 
 ```bash
-uv run pytest -q                                   # 334 passed, 4 skipped (Windows)
+uv run pytest -q                                   # 338 passed, 4 skipped (Windows)
 uv run ruff check src/ tests/ examples/
 uv run black --check src/ tests/ examples/
 uv run mypy src/
 ```
 
 Four tests are POSIX-only — three `0600` host-key mode-bit assertions and the
-end-to-end SIGTERM drain — so Linux and macOS report `338 passed`. CI runs
+end-to-end SIGTERM drain — so Linux and macOS report `342 passed`. CI runs
 Python 3.11–3.13 across Linux, macOS, and Windows.
 
 Docs and the dashboard example are separate dependency groups, so a test run

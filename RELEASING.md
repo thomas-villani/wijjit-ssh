@@ -7,24 +7,28 @@ changelog section as its notes. Nothing is uploaded by hand.
 
 ## Before the first release
 
-Three things are true today and must stop being true before `0.1.0` can go out.
+Three things blocked `0.1.0`. All three are **done** as of the 0.1.0 preparation,
+and are recorded here because the `verify` job still enforces the second one and
+a future contributor will want to know why.
 
-1. **`wijjit` must be on PyPI.** `wijjit-ssh` depends on it. Until it publishes,
-   a wheel here installs for nobody.
-2. **`[tool.uv.sources]` must be gone from `pyproject.toml`.** It points `wijjit`
-   at `../wijjit`. `uv` strips the section from published metadata, so it never
+1. **`wijjit` must be on PyPI.** ✅ `wijjit` 0.1.0 published. `wijjit-ssh` depends
+   on it; until it published, a wheel here installed for nobody.
+2. **`[tool.uv.sources]` must be gone from `pyproject.toml`.** ✅ Removed, and
+   `uv.lock` re-resolved against the real index. It had pointed `wijjit` at
+   `../wijjit`. `uv` strips the section from published metadata, so it never
    reaches an installer — which is the problem: while it is there, `wijjit>=0.1.0`
    has never once been resolved from the real index by anything, here or in CI.
-   The `verify` job refuses to build while that line exists.
-3. **CI should collapse to a single checkout.** `ci.yml` and `docs.yml` each
-   check out both repositories to satisfy the path source. Once the pin is
-   ordinary, delete the second `actions/checkout` step in every job, drop
-   `path: wijjit-ssh` from the first, and remove `working-directory: wijjit-ssh`
-   from every `run:`. Then tighten the sync to `uv sync --locked` — it is
-   currently unpinned because the path source makes `uv.lock` move whenever the
-   sibling checkout's own dependencies do.
+   **The `verify` job still refuses to build while that line exists**, so a
+   contributor who re-adds it for local development will be caught at release
+   rather than by a user. Use `uv pip install -e ../wijjit` instead; see
+   `CONTRIBUTING.md`.
+3. **CI should collapse to a single checkout.** ✅ `ci.yml` and `docs.yml` each
+   checked out both repositories to satisfy the path source. Both are ordinary
+   single-checkout workflows now, and the sync is tightened to `uv sync --locked`
+   — it had been unpinned because the path source made `uv.lock` move whenever
+   the sibling checkout's own dependencies did.
 
-Also rehearse on TestPyPI once. A project name is claimed on first upload and a
+Rehearse on TestPyPI once. A project name is claimed on first upload and a
 bad `0.1.0` can be yanked but never replaced:
 
 ```bash

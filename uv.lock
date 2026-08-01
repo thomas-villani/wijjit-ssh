@@ -1367,7 +1367,8 @@ wheels = [
 
 [[package]]
 name = "wijjit"
-source = { editable = "../wijjit" }
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jinja2" },
     { name = "prompt-toolkit" },
@@ -1377,33 +1378,10 @@ dependencies = [
     { name = "tinycss2" },
     { name = "wcwidth" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "black", marker = "extra == 'dev'", specifier = ">=25.9.0" },
-    { name = "jinja2", specifier = ">=3.1.6" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.18.2" },
-    { name = "myst-parser", marker = "extra == 'dev'", specifier = ">=2.0.0" },
-    { name = "openpyxl", marker = "extra == 'xlsx'", specifier = ">=3.1.0" },
-    { name = "pillow", marker = "extra == 'images'", specifier = ">=12.0.0" },
-    { name = "prompt-toolkit", specifier = ">=3.0.36" },
-    { name = "pygments", specifier = ">=2.15.0" },
-    { name = "pyperclip", specifier = ">=1.8.2" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.2" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
-    { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=5.1.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0" },
-    { name = "rich", specifier = ">=13.7.1" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.2" },
-    { name = "sphinx", marker = "extra == 'dev'", specifier = ">=8.2.3" },
-    { name = "sphinx-copybutton", marker = "extra == 'dev'", specifier = ">=0.5.2" },
-    { name = "sphinx-rtd-theme", marker = "extra == 'dev'", specifier = ">=3.0.2" },
-    { name = "sphinx-tabs", marker = "extra == 'dev'", specifier = ">=3.4.7" },
-    { name = "syrupy", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "tinycss2", specifier = ">=1.2.1" },
-    { name = "wcwidth", specifier = ">=0.2.5" },
+sdist = { url = "https://files.pythonhosted.org/packages/f5/22/1b8abbab974f7fbbc1abfd90935d2c504329d68cac311730d0777b9d3d5c/wijjit-0.1.0.tar.gz", hash = "sha256:2afa6d072b2b332ab4d8f54f18c456abc3d7b48dc97a5b4de931d3d182224758", size = 1149408, upload-time = "2026-07-31T18:04:39.92Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/38/5afe166931276cc36099056d1e7f0dcc41991e36cb869f0ff7dbf0b0bd5c/wijjit-0.1.0-py3-none-any.whl", hash = "sha256:8c0fb63461177e9b8b55283309567423d3f97823aff13b36dc1491206a2d0765", size = 663987, upload-time = "2026-07-31T18:04:38.433Z" },
 ]
-provides-extras = ["dev", "images", "xlsx"]
 
 [[package]]
 name = "wijjit-ssh"
@@ -1438,7 +1416,7 @@ examples = [
 [package.metadata]
 requires-dist = [
     { name = "asyncssh", specifier = ">=2.14" },
-    { name = "wijjit", editable = "../wijjit" },
+    { name = "wijjit", specifier = ">=0.1.0" },
 ]
 
 [package.metadata.requires-dev]
