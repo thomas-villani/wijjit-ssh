@@ -150,6 +150,12 @@ in `SPEC.md`'s M5 and is documented in the README, the docs, and `SECURITY.md`.
   compose port mapping is `127.0.0.1:8022:8022` now, and the Dockerfile,
   `deploy/README.md`, and the deployment guide each say plainly that the demo app
   is the unauthenticated part and the hardening around it is what transfers.
+- **`SPEC.md` described a repository that no longer existed.** The file tree
+  still marked `deploy/` as `(TODO, §12)` while §13's own milestone log recorded
+  it `[DONE]`, and the M4 notes still explained CI's two-checkout arrangement in
+  the present tense — "since wijjit is not on PyPI, each job checks out **both**
+  repos" — which 0.1.0 undid. `SPEC.md` ships in the sdist and is linked from the
+  README as the plan of record.
 - **Naming `OpenAuth` explicitly bypassed the fail-closed construction check.**
   The gate sat on the `auth is None` branch, so `WijjitSSH(make_app,
   auth=OpenAuth())` built and served an unauthenticated server with only a log
