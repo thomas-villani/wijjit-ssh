@@ -14,6 +14,7 @@ import logging
 
 import pytest
 
+from wijjit_ssh import limits
 from wijjit_ssh.limits import IdleTimer, Rejection, SessionRegistry, TokenBucket
 
 
@@ -196,6 +197,82 @@ def test_the_per_ip_cap_is_checked_before_the_rate_limit() -> None:
     # The bucket still has its full burst: the refused attempts cost nothing.
     for _ in range(5):
         assert registry.check_connection("10.0.0.7") is None
+
+
+def test_the_rate_limit_survives_the_peer_disconnecting() -> None:
+    """The bucket must outlive the connections it throttled.
+
+    Connect / get refused / disconnect / repeat is the exact shape of a
+    brute-force loop, and the peer holds zero connections at every moment
+    connection_closed() runs. Evicting its bucket there made connect_rate a
+    concurrency limit wearing a rate limit's name: every attempt found a fresh
+    full burst and the sustained rate never bound at all.
+    """
+    clock = FakeClock()
+    registry = SessionRegistry(
+        max_per_ip=100, connect_rate=1.0, connect_burst=3, clock=clock
+    )
+
+    allowed = 0
+    for _ in range(50):
+        if registry.check_connection("10.0.0.7") is None:
+            registry.connection_opened("10.0.0.7")
+            allowed += 1
+            registry.connection_closed("10.0.0.7")  # hang up and come straight back
+
+    # burst=3, and no time has passed, so the refill has contributed nothing.
+    assert allowed == 3
+
+    clock.advance(2.0)
+    assert registry.check_connection("10.0.0.7") is None
+    assert registry.check_connection("10.0.0.7") is None
+    assert registry.check_connection("10.0.0.7") is not None
+
+
+def test_a_refilled_bucket_is_forgotten_when_its_peer_leaves() -> None:
+    """The other half: a bucket that is no longer throttling is not remembered."""
+    clock = FakeClock()
+    registry = SessionRegistry(connect_rate=1.0, connect_burst=2, clock=clock)
+
+    assert registry.check_connection("10.0.0.7") is None
+    registry.connection_opened("10.0.0.7")
+    registry.connection_closed("10.0.0.7")
+    # Still draining, so still tracked.
+    assert "10.0.0.7" in registry._buckets
+
+    clock.advance(10.0)
+    registry.connection_opened("10.0.0.7")
+    registry.connection_closed("10.0.0.7")
+    assert registry._buckets == {}
+
+
+def test_buckets_from_a_wide_flood_are_swept_once_they_refill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A flood from many addresses leaves a bucket each, and none of them is
+    evicted by the per-peer path while it is still draining. The sweep is what
+    keeps that from growing without bound."""
+    monkeypatch.setattr(limits, "BUCKET_SWEEP_THRESHOLD", 8)
+
+    clock = FakeClock()
+    registry = SessionRegistry(
+        max_per_ip=100, connect_rate=1.0, connect_burst=1, clock=clock
+    )
+
+    def hit(peer: str) -> None:
+        registry.check_connection(peer)
+        registry.connection_opened(peer)
+        registry.connection_closed(peer)
+
+    for index in range(7):  # one short of the threshold, so no sweep runs yet
+        hit(f"10.1.0.{index}")
+    assert len(registry._buckets) == 7  # all mid-refill, so all still tracked
+
+    clock.advance(10.0)  # every one of them refills
+    hit("10.9.9.9")  # ...and the next close crosses the threshold
+
+    # The seven refilled buckets are gone; the newcomer's, still draining, stays.
+    assert list(registry._buckets) == ["10.9.9.9"]
 
 
 # -- max_sessions --------------------------------------------------------------

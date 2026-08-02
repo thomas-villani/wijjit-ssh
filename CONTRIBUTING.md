@@ -35,14 +35,14 @@ These are exactly the commands CI runs, so a clean local run means a green
 build:
 
 ```bash
-uv run pytest -q                                   # 338 passed, 4 skipped (Windows)
+uv run pytest -q                                   # 341 passed, 4 skipped (Windows)
 uv run ruff check src/ tests/ examples/
 uv run black --check src/ tests/ examples/
 uv run mypy src/
 ```
 
 Four tests are POSIX-only — three `0600` host-key mode-bit assertions and the
-end-to-end SIGTERM drain — so Linux and macOS report `342 passed`. CI runs
+end-to-end SIGTERM drain — so Linux and macOS report `345 passed`. CI runs
 Python 3.11–3.13 across Linux, macOS, and Windows.
 
 Docs and the dashboard example are separate dependency groups, so a test run

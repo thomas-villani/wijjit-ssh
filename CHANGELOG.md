@@ -118,6 +118,21 @@ in `SPEC.md`'s M5 and is documented in the README, the docs, and `SECURITY.md`.
 
 ### Fixed
 
+- **`connect_rate` never limited a rate.** `SessionRegistry.connection_closed`
+  discarded a peer's token bucket once its last connection went away, on the
+  reasoning that the dict would otherwise grow one entry per distinct peer
+  forever. But the attack `connect_rate` exists to stop is connect, get refused
+  at auth, disconnect, repeat — and that peer holds *zero* connections at every
+  moment `connection_closed` runs. Every attempt therefore found no bucket, built
+  a fresh one, and spent a full burst: with `connect_rate=1.0, connect_burst=3`,
+  50 serial connections were admitted in zero elapsed time. What it actually
+  enforced was a second concurrency limit, duplicating `max_per_ip`. A bucket now
+  outlives its connections and is only forgotten once it has refilled, at which
+  point it is indistinguishable from the fresh one that would replace it; a
+  flood from many addresses at once is bounded by an amortized sweep of the
+  refilled ones. `SECURITY.md` lists resource exhaustion that defeats
+  `connect_rate` as in scope, so this was a documented guarantee the code did
+  not keep.
 - **Naming `OpenAuth` explicitly bypassed the fail-closed construction check.**
   The gate sat on the `auth is None` branch, so `WijjitSSH(make_app,
   auth=OpenAuth())` built and served an unauthenticated server with only a log
