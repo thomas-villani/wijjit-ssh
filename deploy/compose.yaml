@@ -11,8 +11,16 @@ services:
       # the healthcheck from two different directories.
       context: ..
       dockerfile: deploy/Dockerfile
+    # Loopback deliberately, not "8022:8022". The image serves
+    # examples/hello_ssh.py, which falls back to allow_anonymous=True when it
+    # finds no ~/.ssh/authorized_keys - and there is none in the image, so as
+    # built this accepts ANY username with NO credential. Publishing that on
+    # 0.0.0.0, under `restart: unless-stopped`, would put an unauthenticated SSH
+    # server on every interface of the host for as long as the daemon runs.
+    # Point the build at your own app with a real auth policy before you widen
+    # this. See the header of deploy/Dockerfile.
     ports:
-      - "8022:8022"
+      - "127.0.0.1:8022:8022"
     volumes:
       - hostkey:/var/lib/wijjit-ssh
     restart: unless-stopped

@@ -140,6 +140,16 @@ in `SPEC.md`'s M5 and is documented in the README, the docs, and `SECURITY.md`.
   has covered `deploy/` as well since M4, so a change to `deploy/healthcheck.py`
   could pass everything a contributor was told to run and still redden the
   build. All four now include it, as does `CONTRIBUTING.md`'s style section.
+- **The reference container image is unauthenticated, and said so nowhere.**
+  `deploy/Dockerfile` serves `examples/hello_ssh.py`, whose auth falls back to
+  `allow_anonymous=True` when it finds no `~/.ssh/authorized_keys` — and the
+  image has none, so the fallback is the only path it takes. `docker compose up`
+  therefore published an SSH server accepting any username with no credential on
+  `0.0.0.0:8022`, under `restart: unless-stopped`, from files introduced as
+  "reference artifacts for running a `wijjit-ssh` server in production". The
+  compose port mapping is `127.0.0.1:8022:8022` now, and the Dockerfile,
+  `deploy/README.md`, and the deployment guide each say plainly that the demo app
+  is the unauthenticated part and the hardening around it is what transfers.
 - **Naming `OpenAuth` explicitly bypassed the fail-closed construction check.**
   The gate sat on the `auth is None` branch, so `WijjitSSH(make_app,
   auth=OpenAuth())` built and served an unauthenticated server with only a log
