@@ -64,6 +64,11 @@ REASON_SERVER_FULL = "server_full"
 REASON_PER_IP = "per_ip"
 REASON_RATE_LIMITED = "rate_limited"
 
+#: How many per-IP token buckets may accumulate before
+#: :class:`SessionRegistry` sweeps the refilled ones. Only reached by a flood
+#: from many distinct addresses at once; see ``_forget_bucket``.
+BUCKET_SWEEP_THRESHOLD = 1024
+
 
 @dataclass(frozen=True)
 class Rejection:
@@ -165,6 +170,26 @@ class TokenBucket:
     def enabled(self) -> bool:
         """Whether this bucket limits anything at all."""
         return self._rate > 0
+
+    @property
+    def is_full(self) -> bool:
+        """Whether the bucket has refilled to capacity.
+
+        A full bucket is indistinguishable from a freshly constructed one, which
+        is what makes it safe to forget - see
+        :meth:`SessionRegistry.connection_closed`. Read-only: unlike
+        :meth:`consume` this does not fold the refill into the stored state.
+
+        Returns
+        -------
+        bool
+            True when nothing is currently being throttled. Always True for a
+            disabled bucket.
+        """
+        if not self.enabled:
+            return True
+        elapsed = max(0.0, self._clock() - self._updated)
+        return self._tokens + elapsed * self._rate >= self._burst
 
     def consume(self, amount: float = 1.0) -> bool:
         """Take ``amount`` tokens if available.
@@ -343,6 +368,7 @@ class SessionRegistry:
         self._sessions: dict[str, ManagedSession] = {}
         self._connections_per_ip: dict[str, int] = {}
         self._buckets: dict[str, TokenBucket] = {}
+        self._bucket_sweep_at = BUCKET_SWEEP_THRESHOLD
         self._drained: asyncio.Event | None = None
 
     # -- connection admission (pre-auth) ---------------------------------------
@@ -410,7 +436,15 @@ class SessionRegistry:
             # per distinct peer and never shrinks, which is a slow leak on a
             # public server.
             self._connections_per_ip.pop(peer_ip, None)
-            self._buckets.pop(peer_ip, None)
+            # The bucket, deliberately, is NOT dropped alongside it. A rate
+            # limiter has to outlive the connections it throttled: the pattern
+            # connect_rate exists to stop is connect / get refused / disconnect
+            # / repeat, and that peer holds zero connections at every moment
+            # this runs. Discarding its bucket here handed the next attempt a
+            # full burst, so the limit measured concurrency and never rate.
+            # Only a refilled bucket is safe to forget - at that point it is
+            # indistinguishable from the fresh one we would build anyway.
+            self._forget_bucket(peer_ip)
 
     def _bucket_for(self, peer_ip: str) -> TokenBucket:
         bucket = self._buckets.get(peer_ip)
@@ -420,6 +454,31 @@ class SessionRegistry:
             )
             self._buckets[peer_ip] = bucket
         return bucket
+
+    def _forget_bucket(self, peer_ip: str) -> None:
+        """Drop ``peer_ip``'s bucket if it is no longer throttling anything.
+
+        Keeping a bucket costs memory, so a peer that has finished being
+        rate-limited should not be remembered forever. Keeping one that is still
+        draining costs correctness, which is worth more - so the eviction is
+        conditional, and the peers whose buckets linger are exactly the ones
+        currently over the rate.
+        """
+        bucket = self._buckets.get(peer_ip)
+        if bucket is not None and bucket.is_full:
+            del self._buckets[peer_ip]
+            return
+
+        # A flood from many addresses leaves a bucket per address, each of them
+        # non-full and so none of them evicted above. Sweep the ones that have
+        # since refilled, and only once the dict has grown - with the threshold
+        # doubling behind it, the O(n) pass is amortized to O(1) per connection
+        # rather than running on every close of a busy server.
+        if len(self._buckets) < self._bucket_sweep_at:
+            return
+        for ip in [ip for ip, b in self._buckets.items() if b.is_full]:
+            del self._buckets[ip]
+        self._bucket_sweep_at = max(BUCKET_SWEEP_THRESHOLD, len(self._buckets) * 2)
 
     # -- session admission (post-auth) -----------------------------------------
 

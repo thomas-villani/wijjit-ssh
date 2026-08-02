@@ -109,7 +109,7 @@ wijjit-ssh/
     ci.yml                    test matrix / lint / coverage   (§13 M4)      [done]
     docs.yml                  Sphinx build + Pages deploy     (§13 M4)      [done]
   docs/                       Sphinx site                     (§13 M4)      [done]
-  deploy/                     systemd unit, Dockerfile, healthcheck (TODO, §12)
+  deploy/                     systemd unit, Dockerfile, healthcheck (§12)   [done]
   src/wijjit_ssh/
     __init__.py               public API
     py.typed                  PEP 561 marker                                [done]
@@ -630,10 +630,11 @@ the work turned up that this list did not anticipate.
     (ruff + black + mypy over `src/`, `tests/`, and `examples/`), and coverage.
     It is uv-based rather than a copy of wijjit's pip-based workflow, because dev
     deps here are PEP 735 `[dependency-groups]`, which `pip install -e ".[dev]"`
-    cannot see at all. Since wijjit is not on PyPI, each job checks out **both**
-    repos as siblings so the existing `../wijjit` path source resolves unchanged
-    — CI is then byte-for-byte the layout the README documents for local
-    development, and collapses to a single checkout the day wijjit publishes.
+    cannot see at all. While wijjit was not on PyPI, each job checked out
+    **both** repos as siblings so the existing `../wijjit` path source resolved
+    unchanged — CI was then byte-for-byte the layout the README documented for
+    local development. It collapsed to a single checkout when wijjit published,
+    which it did before 0.1.0 shipped.
     **This is the first time the four POSIX-only tests have ever run.**
   - **Docs site. [DONE]** A Sphinx site under `docs/`, same stack as wijjit
     (`sphinx-rtd-theme` / `copybutton` / `tabs`, `docs/Makefile` + `make.bat`),

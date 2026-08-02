@@ -8,6 +8,18 @@
 #
 # It runs examples/hello_ssh.py so the image is something you can actually start.
 # Swap the COPY and CMD for your own application; everything else transfers.
+#
+# READ THIS BEFORE EXPOSING IT. As built, this image is UNAUTHENTICATED.
+# hello_ssh.py serves public keys when it finds a ~/.ssh/authorized_keys and
+# falls back to allow_anonymous=True when it does not - and there is no
+# authorized_keys in the image, so the fallback is the only path taken here. Any
+# client that reaches port 8022 gets a session as whatever username it typed.
+# That is fine for `docker compose up` on a laptop, which is why compose.yaml
+# publishes to 127.0.0.1 only, and it is why the container's own log opens with
+# hello_ssh.py's NO AUTHENTICATION warning. It is not a posture to inherit: the
+# structure below (non-root, read-only rootfs, dropped caps, persistent host key
+# volume, real healthcheck) is the part meant for production, and it expects an
+# app of yours that passes a real `auth` policy. See SECURITY.md.
 
 FROM python:3.13-slim
 

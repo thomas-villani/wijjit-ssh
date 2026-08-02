@@ -35,14 +35,14 @@ These are exactly the commands CI runs, so a clean local run means a green
 build:
 
 ```bash
-uv run pytest -q                                   # 338 passed, 4 skipped (Windows)
-uv run ruff check src/ tests/ examples/
-uv run black --check src/ tests/ examples/
-uv run mypy src/
+uv run pytest -q                                   # 341 passed, 4 skipped (Windows)
+uv run ruff check src/ tests/ examples/ deploy/
+uv run black --check src/ tests/ examples/ deploy/
+uv run mypy src/ deploy/
 ```
 
 Four tests are POSIX-only — three `0600` host-key mode-bit assertions and the
-end-to-end SIGTERM drain — so Linux and macOS report `342 passed`. CI runs
+end-to-end SIGTERM drain — so Linux and macOS report `345 passed`. CI runs
 Python 3.11–3.13 across Linux, macOS, and Windows.
 
 Docs and the dashboard example are separate dependency groups, so a test run
@@ -63,10 +63,11 @@ navigate, which is a bug, not a note.
 
 - **Black, 88 columns, `py311` target.** Not negotiable and not worth
   discussing; run the formatter.
-- **Ruff over `src/`, `tests/`, and `examples/`.** All three, unlike the wijjit
-  repo's own workflow. They are already clean, so there is no reason to leave
-  them unguarded.
-- **`mypy --strict` over `src/`.** The package ships `py.typed`, so its
+- **Ruff over `src/`, `tests/`, `examples/`, and `deploy/`.** All four, unlike
+  the wijjit repo's own workflow. They are already clean, so there is no reason
+  to leave them unguarded - and `deploy/healthcheck.py` is a script people copy
+  into a Dockerfile, so it holds the same bar as the package.
+- **`mypy --strict` over `src/` and `deploy/`.** The package ships `py.typed`, so its
   annotations are a promise to every downstream type checker. New public
   functions are fully annotated or they do not merge.
 - **NumPy-style docstrings**, rendered by napoleon into the API reference. The

@@ -98,6 +98,23 @@ Docker
 The image runs as a non-root user, is read-only apart from its state volume, and
 drops all capabilities.
 
+.. warning::
+
+   **The image as built is unauthenticated.** It serves
+   ``examples/hello_ssh.py``, which uses public-key auth when it finds a
+   ``~/.ssh/authorized_keys`` and falls back to ``allow_anonymous=True`` when it
+   does not — and there is no ``authorized_keys`` in the image, so the fallback
+   is the only path it takes. Any client reaching the port gets a session as
+   whatever username it typed. That is why ``compose.yaml`` publishes to
+   ``127.0.0.1`` and why the container's first log line is hello_ssh.py's NO
+   AUTHENTICATION warning.
+
+   What transfers to production is the structure *around* the app — the
+   non-root user, the read-only filesystem, the dropped capabilities, the host
+   key volume, the stop timeout, the healthcheck. Repoint the ``COPY`` and
+   ``CMD`` at an app that passes a real ``auth`` policy before you widen the
+   port binding.
+
 .. danger::
 
    **Mount a volume at** ``/var/lib/wijjit-ssh``. Without one the host key is

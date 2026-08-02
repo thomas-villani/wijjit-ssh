@@ -15,6 +15,20 @@ The prose that explains the choices, and the production security checklist, is i
 the deployment guide:
 <https://thomas-villani.github.io/wijjit-ssh/guide/deployment.html>
 
+## The image is a demo, and it is unauthenticated
+
+The `Dockerfile` serves `examples/hello_ssh.py`, which uses public-key auth when
+it finds a `~/.ssh/authorized_keys` and falls back to `allow_anonymous=True` when
+it does not. There is no `authorized_keys` in the image, so **as built it accepts
+any username with no credential.** `compose.yaml` therefore publishes to
+`127.0.0.1` only.
+
+What is production-shaped here is the *structure* around the app — non-root user,
+read-only root filesystem, dropped capabilities, a persistent host key volume, a
+stop timeout above `shutdown_grace`, and a healthcheck that proves more than a
+TCP handshake. Point the `COPY` and `CMD` at an app of yours that passes a real
+`auth` policy, then widen the port binding.
+
 ## The three things that go wrong
 
 1. **The host key is not persistent.** Regenerating it gives every returning user
