@@ -316,9 +316,9 @@ git clone https://github.com/thomas-villani/wijjit-ssh.git
 cd wijjit-ssh
 uv sync                            # wijjit comes from PyPI
 uv run pytest -q                   # 341 passed, 4 skipped
-uv run ruff check src/ tests/ examples/
-uv run black --check src/ tests/ examples/
-uv run mypy src/
+uv run ruff check src/ tests/ examples/ deploy/
+uv run black --check src/ tests/ examples/ deploy/
+uv run mypy src/ deploy/
 uv run pytest --cov=src/wijjit_ssh --cov-report=term-missing -q
 ```
 

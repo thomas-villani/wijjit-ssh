@@ -65,9 +65,9 @@ it for an upload token scoped to this project alone.
    ```bash
    uv sync
    uv run pytest -q
-   uv run ruff check src/ tests/ examples/
-   uv run black --check src/ tests/ examples/
-   uv run mypy src/
+   uv run ruff check src/ tests/ examples/ deploy/
+   uv run black --check src/ tests/ examples/ deploy/
+   uv run mypy src/ deploy/
    uv sync --group docs
    uv run sphinx-build -b html -W --keep-going docs/source docs/build/html
    ```

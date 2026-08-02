@@ -133,6 +133,13 @@ in `SPEC.md`'s M5 and is documented in the README, the docs, and `SECURITY.md`.
   refilled ones. `SECURITY.md` lists resource exhaustion that defeats
   `connect_rate` as in scope, so this was a documented guarantee the code did
   not keep.
+- **The documented check commands were not the ones CI runs.** `README.md`,
+  `CONTRIBUTING.md`, `RELEASING.md`, and the installation page all say "these are
+  exactly the commands CI runs, so a clean local run means a green build", then
+  list ruff, black, and mypy over `src/`, `tests/`, and `examples/`. `ci.yml`
+  has covered `deploy/` as well since M4, so a change to `deploy/healthcheck.py`
+  could pass everything a contributor was told to run and still redden the
+  build. All four now include it, as does `CONTRIBUTING.md`'s style section.
 - **Naming `OpenAuth` explicitly bypassed the fail-closed construction check.**
   The gate sat on the `auth is None` branch, so `WijjitSSH(make_app,
   auth=OpenAuth())` built and served an unauthenticated server with only a log
