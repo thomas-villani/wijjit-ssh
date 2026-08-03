@@ -66,7 +66,7 @@ dev = [
     # the screen a user would actually see. See tests/_client.py.
     "pyte>=0.8",
     "black>=24.0",
-    "ruff>=0.4",
+    "ruff>=0.16.1",
     "mypy>=1.10",
     # tests/test_examples.py imports every example, so the dashboard's psutil is
     # a test dependency now and a plain `uv sync` has to bring it. Included
