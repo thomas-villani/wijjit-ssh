@@ -39,8 +39,9 @@ address into every line it emits:
 
 .. code-block:: text
 
-   2026-07-16 11:04:22 INFO  wijjit_ssh.session: [3f9a1c04 ada@10.0.0.7] Session started (term=xterm, 120x40)
-   2026-07-16 11:09:47 INFO  wijjit_ssh.session: [3f9a1c04 ada@10.0.0.7] Session ended (idle timeout, 5m25s)
+   2026-07-16 11:04:22 INFO    wijjit_ssh.session: [3f9a1c04 ada@10.0.0.7] Session started (term=xterm, 120x40)
+   2026-07-16 11:09:47 INFO    wijjit_ssh.session: [3f9a1c04 ada@10.0.0.7] Closing session: idle_timeout
+   2026-07-16 11:09:47 INFO    wijjit_ssh.session: [3f9a1c04 ada@10.0.0.7] Session ended after 325.0s: idle_timeout
 
 The id is eight hex characters - long enough not to collide in a log file, short
 enough to sit in every line and still be greppable. It is a correlation handle,
@@ -95,9 +96,22 @@ metrics library:
    * - ``session.started``
      - ``session_id``, ``username``, ``peer_ip``
    * - ``session.rejected``
-     - ``peer_ip``, ``reason``
+     - ``peer_ip``, ``reason``, and ``username`` **only** when the refusal came
+       after authentication
    * - ``session.ended``
-     - ``session_id``, ``reason``, ``duration``
+     - ``session_id``, ``username``, ``peer_ip``, ``reason``, ``duration``
+
+.. important::
+
+   Read the payload with ``fields.get(...)`` rather than subscripting it.
+   ``session.rejected`` is emitted from two places and they do not carry the same
+   fields: a session refused by ``max_sessions`` has authenticated, so it has a
+   ``username``, while one refused for requesting no pty is reported without one.
+
+   For the same reason, ``session.ended`` fires for sessions that never emitted
+   ``session.started`` — a no-pty refusal, or an app factory that raised. A hook
+   that pairs the two (a gauge, a subscriber registry) has to tolerate an
+   ``ended`` it never saw a ``started`` for.
 
 Wiring that to Prometheus is a dozen lines and no dependency on our side:
 

@@ -21,10 +21,17 @@ auth against it (the recommended setup). If you do not, it falls back to *no
 authentication* so the demo still runs - and says so loudly. wijjit-ssh will not
 run unauthenticated unless you ask for it in as many words, which is why the
 fallback has to pass ``allow_anonymous=True``.
+
+Bind address: the unauthenticated fallback listens on **loopback only**, because
+"anyone who can reach the port gets a session" is a very different sentence when
+the port is on every interface of a laptop on someone else's wifi. Set
+``WIJJIT_SSH_HOST`` to widen it - ``deploy/Dockerfile`` sets ``0.0.0.0``, since a
+container's published port cannot reach a loopback bind.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from wijjit import Wijjit, render_template_string
@@ -70,6 +77,18 @@ def make_app(session: SSHSession) -> Wijjit:
     return app
 
 
+def bind_host(*, authenticated: bool) -> str:
+    """Where to listen: loopback unless authenticated, or unless told otherwise.
+
+    ``""`` means every interface, which is the right default for a server that
+    checks credentials and the wrong one for the fallback below.
+    """
+    override = os.environ.get("WIJJIT_SSH_HOST")
+    if override is not None:
+        return override
+    return "" if authenticated else "127.0.0.1"
+
+
 def build_server() -> WijjitSSH:
     """Prefer public-key auth; fall back to open auth so the demo always runs."""
     # Generated on first run, reused after. Production would manage this out of
@@ -83,17 +102,21 @@ def build_server() -> WijjitSSH:
             make_app,
             host_keys=[host_key],
             auth=AuthorizedKeys(authorized_keys),
+            host=bind_host(authenticated=True),
         )
 
+    host = bind_host(authenticated=False)
     print(
         f"WARNING: no {authorized_keys} found - running with NO AUTHENTICATION.\n"
-        "         Anyone who can reach this port can connect as any username.\n"
-        "         Fine on localhost; never do this on a real network."
+        f"         Anyone who can reach this port can connect as any username.\n"
+        f"         Listening on {host or 'ALL interfaces'}; set WIJJIT_SSH_HOST to\n"
+        f"         change that, and never widen it on an untrusted network."
     )
-    return WijjitSSH(make_app, host_keys=[host_key], allow_anonymous=True)
+    return WijjitSSH(make_app, host_keys=[host_key], allow_anonymous=True, host=host)
 
 
 if __name__ == "__main__":
     server = build_server()
-    print("Wijjit SSH server listening on port 8022 (ssh -p 8022 you@localhost)")
+    where = server.config.host or "0.0.0.0"
+    print(f"Wijjit SSH server listening on {where}:8022 (ssh -p 8022 you@localhost)")
     server.run(port=8022)

@@ -109,6 +109,11 @@ drops all capabilities.
    ``127.0.0.1`` and why the container's first log line is hello_ssh.py's NO
    AUTHENTICATION warning.
 
+   Outside a container that example binds loopback on the fallback path. The
+   image sets ``WIJJIT_SSH_HOST=0.0.0.0`` to undo it, because Docker forwards a
+   published port to the container's own address — so the loopback protecting
+   you here is the host-side mapping, not the app's bind.
+
    What transfers to production is the structure *around* the app — the
    non-root user, the read-only filesystem, the dropped capabilities, the host
    key volume, the stop timeout, the healthcheck. Repoint the ``COPY`` and

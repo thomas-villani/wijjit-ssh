@@ -255,6 +255,13 @@ uv sync --group examples                                     # dashboard needs p
 uv run --group examples python examples/dashboard_ssh.py     # :8022
 ```
 
+The first two fall back to *no* authentication when they find no
+`~/.ssh/authorized_keys`, so on that path they bind **loopback only** —
+`WIJJIT_SSH_HOST` widens it if you mean to. The dashboard refuses to start
+instead, because it shows the machine's process table and every connected user's
+address. That contrast is the point: `allow_anonymous` is a decision about what
+the app exposes, not a default to inherit.
+
 The first is about the transport; the other two are about the thing the transport
 makes possible - **N live apps in one process, sharing state**. Both are built the
 same way: a hub at module scope that every view reads directly, and
@@ -315,7 +322,7 @@ remaining milestones.
 git clone https://github.com/thomas-villani/wijjit-ssh.git
 cd wijjit-ssh
 uv sync                            # wijjit comes from PyPI
-uv run pytest -q                   # 341 passed, 4 skipped
+uv run pytest -q                   # 351 passed, 4 skipped
 uv run ruff check src/ tests/ examples/ deploy/
 uv run black --check src/ tests/ examples/ deploy/
 uv run mypy src/ deploy/
@@ -330,14 +337,16 @@ uv sync --group docs
 uv run sphinx-build -b html -W --keep-going docs/source docs/build/html
 ```
 
-`psutil` is likewise its own `examples` group — only `dashboard_ssh.py` wants it,
-and nobody running the tests should have to build a C extension for it.
-
 `-W` is what CI uses; the build is warning-clean, and keeping it that way is the
 point of the flag.
 
+`psutil` is its own `examples` group, so `uv run --group examples python
+examples/dashboard_ssh.py` installs what that one example wants. `dev` includes
+that group rather than duplicating it, because `tests/test_examples.py` imports
+every example and so a plain `uv sync` has to bring it too.
+
 The four skips are all POSIX-only - three `0600` host-key mode-bit assertions and
-the end-to-end SIGTERM drain - so on Linux and macOS the suite reports 345 passed.
+the end-to-end SIGTERM drain - so on Linux and macOS the suite reports 355 passed.
 CI covers Python 3.11-3.13 on Linux, macOS, and Windows.
 
 ### Working against an unreleased Wijjit

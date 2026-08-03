@@ -115,6 +115,20 @@ in `SPEC.md`'s M5 and is documented in the README, the docs, and `SECURITY.md`.
   `CHANGELOG.md` and `CONTRIBUTING.md` are pages on the docs site now, included
   rather than copied — which is what `conf.py`'s `myst_parser` had been enabled
   for since the site was built, and never used.
+- **Smoke tests for `examples/`** (`tests/test_examples.py`, 10 tests). Nothing
+  else in the tree imports the examples, so nothing else noticed when one broke
+  — twice now: the Greet button below, and the bind address in "Fixed". Each
+  example is loaded by path into its own module with `Path.home()` and the
+  working directory redirected into `tmp_path`, so a result does not depend on
+  whether the developer running it happens to have SSH keys. Two layers: what
+  `build_server()` decides to expose (the anonymous fallback binds loopback, the
+  authenticated path binds every interface, `WIJJIT_SSH_HOST` overrides both,
+  `dashboard_ssh.py` refuses to start at all), and what each puts on a real
+  client's screen over a real socket — `hello_ssh.py`'s frame *and* its button,
+  and a chat join pushed into an already-open window. Deliberately coarse:
+  nothing here asserts on chart layout or border spacing. `dev` now includes the
+  `examples` dependency group, since a plain `uv sync` has to be able to import
+  every example; `--group examples` still means "what the dashboard wants".
 
 ### Fixed
 
@@ -150,12 +164,54 @@ in `SPEC.md`'s M5 and is documented in the README, the docs, and `SECURITY.md`.
   compose port mapping is `127.0.0.1:8022:8022` now, and the Dockerfile,
   `deploy/README.md`, and the deployment guide each say plainly that the demo app
   is the unauthenticated part and the hardening around it is what transfers.
+- **The unauthenticated examples bound every interface while saying they did
+  not.** `hello_ssh.py` and `chat_ssh.py` fall back to `allow_anonymous=True`
+  when they find no `~/.ssh/authorized_keys`, printed "Fine on localhost; never
+  do this on a real network", and then called `run(port=...)` — where
+  `ServerConfig.host` defaults to `""`, meaning `0.0.0.0`. Running the
+  documented demo on a laptop with no `authorized_keys` published an open SSH
+  server to whatever network that laptop was on, and the warning implied
+  otherwise. The fallback binds `127.0.0.1` now; `WIJJIT_SSH_HOST` overrides it,
+  and `deploy/Dockerfile` sets `0.0.0.0` because Docker forwards a published port
+  to the container's address, where a loopback bind is reachable by nobody (the
+  host-side mapping is what keeps that safe, and it is still `127.0.0.1`). Same
+  class of bug as the compose port mapping above, in the file the compose fix
+  pointed at.
+- **The docs site's `on_event` table was the under-reported one.** The fix
+  above landed in `logging.py` and the README but not in
+  `docs/source/guide/logging.rst`, which still listed `session.ended` as
+  `session_id, reason, duration` and `session.rejected` without its conditional
+  `username` — and `docs/source/examples/index.rst` sends readers there for "the
+  full event table", which is exactly where a hook that subscripts the payload
+  gets written. The page's sample log lines were invented too: the real record is
+  `Session ended after 325.0s: idle_timeout`, not `Session ended (idle timeout,
+  5m25s)`.
+- **Dependabot was told to ignore `wijjit`.** The rule dated from the path
+  source — "there is nothing for dependabot to update and it cannot see the path
+  source anyway" — and survived the move to PyPI, so the one dependency this
+  package is most tightly coupled to was the one it would never propose a bump
+  for. The pin is `wijjit>=0.1.0` with no upper bound and the seam this package
+  implements lives upstream, which is exactly the case `ci.yml`'s header names
+  as now being "caught when the pin moves". The ignore is gone, and `wijjit` is
+  deliberately outside the grouped tooling PRs so it lands on its own with the
+  full matrix behind it. The neighbouring comment claiming CI does not use
+  `uv sync --locked` was stale for the same reason.
+- **`deploy/wijjit-ssh.service` set an environment variable nothing reads.**
+  `WIJJIT_SSH_HOST_KEY` looked like a library convention; `wijjit_ssh` reads no
+  environment at all. It is for the unit's own `ExecStart` app, and now says so
+  with the one line of `load_host_keys` that consumes it.
 - **`SPEC.md` described a repository that no longer existed.** The file tree
   still marked `deploy/` as `(TODO, §12)` while §13's own milestone log recorded
   it `[DONE]`, and the M4 notes still explained CI's two-checkout arrangement in
   the present tense — "since wijjit is not on PyPI, each job checks out **both**
   repos" — which 0.1.0 undid. `SPEC.md` ships in the sdist and is linked from the
-  README as the plan of record.
+  README as the plan of record. A second pass caught the rest: the status line
+  still read "M1, M2 and M3 done" with M4 released two sections below it, the
+  same two-checkout sentence survived in the `docs.yml` note, the lint
+  description was still the pre-`deploy/` one, and every test count was stale
+  ("338 tests" against an actual 345, plus six wrong per-file counts in the
+  layout). Counts drift silently because nothing fails when they are wrong, which
+  is why `RELEASING.md` step 4 now says to check them.
 - **Naming `OpenAuth` explicitly bypassed the fail-closed construction check.**
   The gate sat on the `auth is None` branch, so `WijjitSSH(make_app,
   auth=OpenAuth())` built and served an unauthenticated server with only a log

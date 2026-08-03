@@ -66,6 +66,14 @@ USER wijjit
 VOLUME ["/var/lib/wijjit-ssh"]
 WORKDIR /var/lib/wijjit-ssh
 
+# hello_ssh.py binds loopback on its unauthenticated fallback, which is the right
+# default for a laptop and useless in a container: Docker forwards a published
+# port to the container's own address, so a loopback bind is reachable by nobody.
+# Widening it here is safe only because compose.yaml publishes to 127.0.0.1 on
+# the host. If you widen that mapping, bring your own app and a real auth policy
+# first - see the warning at the top of this file.
+ENV WIJJIT_SSH_HOST=0.0.0.0
+
 EXPOSE 8022
 
 # Completes the SSH key exchange and gets refused at authentication, which

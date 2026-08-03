@@ -58,11 +58,13 @@ to write.
 
 That is also why running this anonymously is worse than it is for ``hello_ssh``:
 with no auth policy, anyone can claim to be anyone. In a chat room that is
-impersonation, not merely unauthenticated access.
+impersonation, not merely unauthenticated access. So the anonymous fallback binds
+**loopback only**; set ``WIJJIT_SSH_HOST`` if you really mean to widen it.
 """
 
 from __future__ import annotations
 
+import os
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -412,6 +414,18 @@ def on_server_event(event: str, fields: Mapping[str, object]) -> None:
             room.leave(session_id)
 
 
+def bind_host(*, authenticated: bool) -> str:
+    """Where to listen: loopback unless authenticated, or unless told otherwise.
+
+    ``""`` means every interface, which is the right default for a server that
+    checks credentials and the wrong one for the fallback below.
+    """
+    override = os.environ.get("WIJJIT_SSH_HOST")
+    if override is not None:
+        return override
+    return "" if authenticated else "127.0.0.1"
+
+
 def build_server() -> WijjitSSH:
     """Prefer public-key auth; fall back to open auth so the demo always runs."""
     host_key = ensure_host_key("ssh_host_key")
@@ -424,23 +438,27 @@ def build_server() -> WijjitSSH:
             host_keys=[host_key],
             auth=AuthorizedKeys(authorized_keys),
             on_event=on_server_event,
+            host=bind_host(authenticated=True),
         )
 
+    host = bind_host(authenticated=False)
     print(
         f"WARNING: no {authorized_keys} found - running with NO AUTHENTICATION.\n"
-        "         In a chat room that is worse than it sounds: usernames come\n"
-        "         straight from SSH, so with no auth policy anyone can connect\n"
-        "         as anyone. Fine on localhost; never on a real network."
+        f"         In a chat room that is worse than it sounds: usernames come\n"
+        f"         straight from SSH, so with no auth policy anyone can connect\n"
+        f"         as anyone. Listening on {host or 'ALL interfaces'}."
     )
     return WijjitSSH(
         make_app,
         host_keys=[host_key],
         allow_anonymous=True,
         on_event=on_server_event,
+        host=host,
     )
 
 
 if __name__ == "__main__":
     server = build_server()
-    print(f"Chat room listening on port {PORT} (ssh -p {PORT} you@localhost)")
+    where = server.config.host or "0.0.0.0"
+    print(f"Chat room listening on {where}:{PORT} (ssh -p {PORT} you@localhost)")
     server.run(port=PORT)

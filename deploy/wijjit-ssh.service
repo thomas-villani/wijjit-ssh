@@ -32,6 +32,10 @@ ExecStart=/opt/wijjit-app/.venv/bin/python -m myapp
 # teaches them to ignore the one warning that matters.
 StateDirectory=wijjit-ssh
 StateDirectoryMode=0700
+# For YOUR app to read - wijjit-ssh itself reads no environment variables. The
+# library takes the path as an argument (load_host_keys([...])), so something in
+# `myapp` has to pick this up:
+#     host_keys=load_host_keys([os.environ["WIJJIT_SSH_HOST_KEY"]])
 Environment=WIJJIT_SSH_HOST_KEY=/var/lib/wijjit-ssh/host_key
 
 Restart=on-failure
