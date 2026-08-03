@@ -68,11 +68,16 @@ dev = [
     "black>=24.0",
     "ruff>=0.4",
     "mypy>=1.10",
+    # tests/test_examples.py imports every example, so the dashboard's psutil is
+    # a test dependency now and a plain `uv sync` has to bring it. Included
+    # rather than duplicated, so `--group examples` stays the one thing a user
+    # runs to get the dashboard and there is only one version bound to bump.
+    { include-group = "examples" },
 ]
-# Same reasoning as `docs` below: its own group, so a plain `uv sync` for the
-# test suite does not build a C extension nobody running the tests needs. Only
-# examples/dashboard_ssh.py imports it.
+# What examples/dashboard_ssh.py needs, and nothing else in the tree does:
 #   uv run --group examples python examples/dashboard_ssh.py
+# Kept as its own group so that command still reads as "install what this one
+# example wants", even though `dev` now pulls it in as well.
 examples = [
     "psutil>=5.9",
 ]

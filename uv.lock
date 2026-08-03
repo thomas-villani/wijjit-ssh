@@ -1395,6 +1395,7 @@ dependencies = [
 dev = [
     { name = "black" },
     { name = "mypy" },
+    { name = "psutil" },
     { name = "pyte" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1423,6 +1424,7 @@ requires-dist = [
 dev = [
     { name = "black", specifier = ">=24.0" },
     { name = "mypy", specifier = ">=1.10" },
+    { name = "psutil", specifier = ">=5.9" },
     { name = "pyte", specifier = ">=0.8" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.23" },

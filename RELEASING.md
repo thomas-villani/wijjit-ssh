@@ -92,10 +92,13 @@ it for an upload token scoped to this project alone.
    `docs/source/index.rst` describe how finished this is, and the "Not yet
    hardened" lists in `README.md`, `SECURITY.md`, and `src/wijjit_ssh/server.py`
    name the gaps — check each still matches what the release actually contains.
-   Check the test counts quoted in `README.md`, `CONTRIBUTING.md`, and
-   `docs/source/getting_started/installation.rst` against a real run, and check
-   `SPEC.md`'s file tree and milestone log against the tree you are shipping;
-   both drift silently, because nothing fails when they are wrong.
+   Check the test counts quoted in `README.md`, `CONTRIBUTING.md`,
+   `docs/source/getting_started/installation.rst`, and `SPEC.md` (which quotes a
+   total *and* a per-file count in its §3 layout) against a real run, and check
+   `SPEC.md`'s status line, file tree, and milestone log against the tree you are
+   shipping; all of it drifts silently, because nothing fails when it is wrong.
+   Per-file counts: `for f in tests/test_*.py; do echo "$f $(uv run pytest "$f"
+   --collect-only -q | grep -c ::)"; done`.
 
 5. **Commit and tag.**
 

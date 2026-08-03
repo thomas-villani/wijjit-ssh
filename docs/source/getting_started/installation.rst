@@ -76,8 +76,8 @@ build:
    uv run mypy src/ deploy/
 
 Four tests are POSIX-only - three ``0600`` host-key mode-bit assertions and the
-end-to-end ``SIGTERM`` drain - so Windows reports ``341 passed, 4 skipped``
-where Linux and macOS report ``345 passed``.
+end-to-end ``SIGTERM`` drain - so Windows reports ``351 passed, 4 skipped``
+where Linux and macOS report ``355 passed``.
 
 Building these docs
 -------------------

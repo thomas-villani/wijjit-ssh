@@ -621,7 +621,10 @@ class ChannelInputSource:
         self._decoder = KeyDecoder()
         self._queue: asyncio.Queue[InputEvent] = asyncio.Queue()
 
-        self._wants_mouse = enable_mouse
+        # `enable_mouse` is the app's *request*, not the current state. Nothing
+        # is sent here: the event loop calls enable_mouse_tracking() once it owns
+        # the screen, and mouse_enabled tracks what the client's terminal has
+        # actually been told.
         self.mouse_enabled = False
         self._mouse_tracking_mode = (
             mouse_tracking_mode
@@ -663,7 +666,10 @@ class ChannelInputSource:
         if not self._decoder.pending_escape():
             return
 
-        loop = asyncio.get_event_loop()
+        # get_running_loop, not get_event_loop: feed() is only ever called from
+        # an asyncssh callback on the loop, and the deprecated fallback that
+        # would create one is a bug rather than a safety net here.
+        loop = asyncio.get_running_loop()
         self._escape_timer = loop.call_later(ESCAPE_TIMEOUT, self._flush_escape)
 
     def _flush_escape(self) -> None:

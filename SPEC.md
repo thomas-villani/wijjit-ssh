@@ -1,6 +1,6 @@
 # wijjit-ssh — Implementation Spec
 
-Status: **in progress — M1, M2 and M3 done.** This document specifies the work to
+Status: **M1–M4 done; released as 0.1.0. M5 remains.** This document specifies the work to
 take `wijjit-ssh` from the original prototype to something you could actually
 deploy: a real async byte-parser input path, pluggable authentication,
 terminal-capability negotiation, resource limits, graceful shutdown, logging,
@@ -19,7 +19,7 @@ tests, and packaging.
   (`ide_ssh.py`, `store_ssh.py`) slipped to post-release; they are additions to
   the docs, not to the package.
 
-338 tests (342 on POSIX, where four Windows-skipped tests run). §4, §5 and §7–§10
+355 tests (351 pass and 4 skip on Windows; all 355 run on POSIX). §4, §5 and §7–§10
 below now describe the code rather than a plan. The remaining work is **M5
 (hardening)** — the big remaining gap is **backpressure (§8)**: a client that
 stops reading still buffers frames in asyncssh without bound.
@@ -132,13 +132,14 @@ wijjit-ssh/
     _client.py                pyte-backed client harness                    [done]
     conftest.py               `serve` factory fixture                       [done]
     test_input_decoder.py     table-driven byte->Key/Mouse (165 cases)      [done]
-    test_roundtrip.py         in-process client<->server + limits wiring    [done]
-    test_auth.py              policies + real-SSH accept/reject (30 tests)  [done]
-    test_keys.py              host keys (22 tests)                          [done]
-    test_config.py            ServerConfig + resolution (31 tests)          [done]
-    test_limits.py            buckets/timers/registry, fake clock (33)      [done]
+    test_roundtrip.py         in-process client<->server (22 tests)         [done]
+    test_auth.py              policies + real-SSH accept/reject (32 tests)  [done]
+    test_keys.py              host keys (25 tests)                          [done]
+    test_config.py            ServerConfig + resolution (33 tests)          [done]
+    test_limits.py            buckets/timers/registry, fake clock (36)      [done]
     test_logging.py           tree containment, session logs, events (18)   [done]
-    test_shutdown.py          stop(), drain, signals (13 tests)             [done]
+    test_shutdown.py          stop(), drain, signals (14 tests)             [done]
+    test_examples.py          examples/ smoke tests (10 tests)              [done]
 ```
 
 ---
@@ -534,7 +535,7 @@ listener. Idempotent under a lock; safe on a server that never started.
   Home/End/PgUp/Dn/Del, F1–F12, modified keys (`ESC[1;5A`), SGR + X10 mouse,
   bracketed paste, split UTF-8, malformed/hostile input, and *every* case
   re-run one byte at a time to prove resumability. Pure, fast, no I/O.
-- **`test_roundtrip.py`** — **[done: 21 tests]** in-process asyncssh client ↔
+- **`test_roundtrip.py`** — **[done: 22 tests]** in-process asyncssh client ↔
   `WijjitSSH`, generated host key, `known_hosts=None`. Covers initial frame,
   keystrokes, UTF-8, split escape sequences, the lone-ESC timer, resize,
   Ctrl+Q disconnect, a failing app factory, and two concurrent differently-sized
@@ -552,15 +553,23 @@ listener. Idempotent under a lock; safe on a server that never started.
   > screen plainly reads `N 1`. Feeding the stream through `pyte` reconstructs
   > what the user actually sees, and has the bonus of validating that our escape
   > sequences are well-formed, since a real emulator has to accept them.
-- **`test_auth.py`** — **[done: 30]** each preset in isolation with fake asyncssh
+- **`test_auth.py`** — **[done: 32]** each preset in isolation with fake asyncssh
   callbacks, plus accept *and* reject over real SSH.
-- **`test_limits.py`** — **[done: 33]** buckets, timers, registry, and drain,
+- **`test_limits.py`** — **[done: 36]** buckets, timers, registry, and drain,
   against an injected clock with no sockets. These carry the real assertions
   about limit behavior; the over-SSH tests above only prove the wiring. Same
   split as the decoder, and the reason the timing assertions here are exact
   rather than sleep-and-hope.
-- **`test_keys.py`** (22), **`test_config.py`** (31), **`test_logging.py`** (18),
-  **`test_shutdown.py`** (13) — **[done]**. Four tests are POSIX-only (three 0600
+- **`test_examples.py`** — **[done: 10]** every file in `examples/` loaded by
+  path into its own module, with `Path.home()` and the working directory
+  redirected into `tmp_path`. Two layers: what each example's `build_server()`
+  decides to expose (the anonymous fallback binds loopback, the authenticated
+  path does not, `WIJJIT_SSH_HOST` overrides both, the dashboard refuses to run
+  at all), and what it puts on a real client's screen over a real socket. Coarse
+  on purpose — see the module docstring. It exists because nothing else in the
+  tree imports `examples/`, which is how both of the bugs it now pins shipped.
+- **`test_keys.py`** (25), **`test_config.py`** (33), **`test_logging.py`** (18),
+  **`test_shutdown.py`** (14) — **[done]**. Four tests are POSIX-only (three 0600
   mode-bit assertions in `test_keys.py`, the end-to-end SIGTERM drain in
   `test_shutdown.py`) and skip on Windows, the only machine this repo was
   developed on. **They first ran under CI in M4** — which is the main reason CI
@@ -607,7 +616,7 @@ the work turned up that this list did not anticipate.
   `ChainAuth` / `OpenAuth`; every asyncssh auth callback forwarded to the policy;
   fail-closed construction (`allow_anonymous=True` required to run open);
   constant-time `check_password`; auth attempts logged (never the credential).
-  30 tests in `test_auth.py`, including accept **and reject** over real SSH.
+  32 tests in `test_auth.py`, including accept **and reject** over real SSH.
 - **M3 — Robust lifecycle. [DONE]** `keys.py` (§7), `limits.py` (§8),
   `logging.py` (§9), `config.py` (§10, pulled forward from M4 — M3 introduced the
   twelve knobs it exists to hold, and threading them as kwargs first would have
@@ -627,7 +636,8 @@ the work turned up that this list did not anticipate.
     basename matched neither, so running the documented demo from the repo root
     left an untracked private host key that `git add .` would commit.
     `.github/workflows/ci.yml` runs test (3.11–3.13 × Linux/macOS/Windows), lint
-    (ruff + black + mypy over `src/`, `tests/`, and `examples/`), and coverage.
+    (ruff + black over `src/`, `tests/`, `examples/`, and `deploy/`; mypy over
+    `src/` and `deploy/`), and coverage.
     It is uv-based rather than a copy of wijjit's pip-based workflow, because dev
     deps here are PEP 735 `[dependency-groups]`, which `pip install -e ".[dev]"`
     cannot see at all. While wijjit was not on PyPI, each job checked out
@@ -651,8 +661,10 @@ the work turned up that this list did not anticipate.
     `.github/workflows/docs.yml` builds with `-W` (warnings are errors; the build
     is clean) on both pushes to main and pull requests, and deploys to Pages only
     from main — so a docs change that breaks the build reddens the PR rather than
-    the deploy. It reuses ci.yml's two-checkout arrangement, since autodoc has to
-    import `wijjit_ssh`, which imports `wijjit`.
+    the deploy. It reused ci.yml's two-checkout arrangement while wijjit resolved
+    from a path, since autodoc has to import `wijjit_ssh`, which imports
+    `wijjit`; like ci.yml it collapsed to a single checkout when wijjit
+    published.
   - **Examples. [DONE for the first two.]** The original plan said "second
     example: auth + multiple views", which would have demonstrated nothing a
     local Wijjit app does not. The gap worth closing is the one that only exists
@@ -684,8 +696,10 @@ the work turned up that this list did not anticipate.
     Action handlers are always called with the `ActionEvent`, and the handler
     took no parameters, so every press raised `TypeError` into
     `_dispatch_action`'s catch and the counter stayed at 0. It was the repo's
-    only example and the README's headline demo. Nothing tests the examples —
-    which is the argument for the tests that should ship with `ide_ssh.py`.
+    only example and the README's headline demo, and nothing tested the
+    examples. `test_examples.py` (§11) closed that gap during the 0.1.0 audit,
+    after the same blind spot produced a second bug — an anonymous fallback
+    that bound every interface — and it now pins both.
   - **Examples, remaining. [TODO]** `ide_ssh.py`: `{% splitpanel %}` +
     `{% tree %}` + `{% codeeditor %}` over `wijjit.helpers.load_filesystem_tree`,
     with execution as a no-shell subprocess — fixed interpreter argv, every path

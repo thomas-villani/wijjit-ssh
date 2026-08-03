@@ -35,18 +35,19 @@ These are exactly the commands CI runs, so a clean local run means a green
 build:
 
 ```bash
-uv run pytest -q                                   # 341 passed, 4 skipped (Windows)
+uv run pytest -q                                   # 351 passed, 4 skipped (Windows)
 uv run ruff check src/ tests/ examples/ deploy/
 uv run black --check src/ tests/ examples/ deploy/
 uv run mypy src/ deploy/
 ```
 
 Four tests are POSIX-only — three `0600` host-key mode-bit assertions and the
-end-to-end SIGTERM drain — so Linux and macOS report `345 passed`. CI runs
+end-to-end SIGTERM drain — so Linux and macOS report `355 passed`. CI runs
 Python 3.11–3.13 across Linux, macOS, and Windows.
 
-Docs and the dashboard example are separate dependency groups, so a test run
-does not pay for Sphinx or build a C extension:
+Docs are a separate dependency group, so a test run does not pay for Sphinx. The
+dashboard example's `psutil` has its own group too, but `dev` includes it: since
+`tests/test_examples.py` imports every example, a plain `uv sync` needs it.
 
 ```bash
 uv sync --group docs
@@ -99,8 +100,14 @@ Prefer, in order:
 
 Async tests need no decorator; `asyncio_mode = "auto"` is set.
 
-Nothing tests `examples/`, which is how `hello_ssh.py`'s Greet button stayed
-broken from the first commit until M4. If you touch an example, run it.
+`tests/test_examples.py` smoke-tests `examples/`, and stops there deliberately.
+It pins what a broken example has in common — it does not build the server it
+claims to, or the screen a user lands on is not the one the docstring describes —
+and asserts nothing about chart layout or border spacing. It exists because
+nothing else in the tree imports `examples/`, so nothing else noticed that
+`hello_ssh.py`'s Greet button was broken from the first commit until M4, or that
+its anonymous fallback bound every interface. Add to it when you add an example;
+still run the thing by hand when you touch one.
 
 ## Commits
 

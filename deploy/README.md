@@ -23,6 +23,12 @@ it does not. There is no `authorized_keys` in the image, so **as built it accept
 any username with no credential.** `compose.yaml` therefore publishes to
 `127.0.0.1` only.
 
+Run outside a container, `hello_ssh.py` binds loopback on that fallback path. The
+image sets `WIJJIT_SSH_HOST=0.0.0.0` to undo it, because Docker forwards a
+published port to the container's own address and a loopback bind would be
+reachable by nobody — which is safe only because the host-side mapping is
+`127.0.0.1`.
+
 What is production-shaped here is the *structure* around the app — non-root user,
 read-only root filesystem, dropped capabilities, a persistent host key volume, a
 stop timeout above `shutdown_grace`, and a healthcheck that proves more than a

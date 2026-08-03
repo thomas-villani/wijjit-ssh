@@ -17,10 +17,12 @@ updates:
       actions:
         patterns: ["*"]
 
-  # `uv.lock` is not pinned in CI (`uv sync`, not `uv sync --locked`) because the
-  # wijjit path source makes it move whenever the sibling checkout's own
-  # dependencies do. So these PRs are about the two real pins - asyncssh and the
-  # dev/docs tooling - not about lockfile churn.
+  # CI runs `uv sync --locked` as of 0.1.0, so `uv.lock` is a reviewed artifact
+  # and these PRs are how it moves. That includes `wijjit`: the pin is
+  # `wijjit>=0.1.0` with no upper bound, and the seam this package implements
+  # (TerminalBackend / InputSource) lives upstream, so a wijjit bump landing as
+  # its own PR with the full test matrix behind it is the point rather than
+  # noise. It is deliberately not in the groups below, for the same reason.
   - package-ecosystem: uv
     directory: /
     schedule:
@@ -42,7 +44,3 @@ updates:
         patterns:
           - sphinx*
           - myst-parser
-    ignore:
-      # Resolved from ../wijjit until it publishes; there is nothing for
-      # dependabot to update and it cannot see the path source anyway.
-      - dependency-name: wijjit
